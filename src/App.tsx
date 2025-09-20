@@ -28,6 +28,89 @@ function TwoHandleSlider({ value, min=0, max=100, step=1, onChange }: {value:[nu
   );
 }
 
+function DepthRangeSlider({ 
+  value, 
+  min = 0, 
+  max = 100, 
+  step = 1, 
+  onChange, 
+  onDragStart,
+  onDragEnd,
+  tooltip
+}: {
+  value: [number, number];
+  min?: number;
+  max?: number;
+  step?: number;
+  onChange: (v: [number, number]) => void;
+  onDragStart?: () => void;
+  onDragEnd?: () => void;
+  tooltip?: { x: number; y: number; text: string } | null;
+}) {
+  const [lo, hi] = value;
+  const clamp = (v: number) => Math.max(min, Math.min(max, v));
+  
+  const handleChange = (newLo: number, newHi: number) => {
+    const clampedLo = clamp(newLo);
+    const clampedHi = clamp(newHi);
+    onChange([Math.min(clampedLo, clampedHi), Math.max(clampedLo, clampedHi)]);
+  };
+
+  return (
+    <div className="relative">
+      {/* Tooltip */}
+      {tooltip && (
+        <div 
+          style={{ left: tooltip.x + 10, top: tooltip.y - 30 }}
+          className="absolute z-20 pointer-events-none text-xs px-2 py-1 rounded bg-black/90 border border-white/20 whitespace-nowrap"
+        >
+          {tooltip.text}
+        </div>
+      )}
+      
+      {/* Range track */}
+      <div className="relative h-2 bg-white/20 rounded-full">
+        {/* Active range */}
+        <div 
+          className="absolute h-full bg-white/40 rounded-full"
+          style={{
+            left: `${((lo - min) / (max - min)) * 100}%`,
+            width: `${((hi - lo) / (max - min)) * 100}%`
+          }}
+        />
+      </div>
+      
+      {/* Slider inputs */}
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={lo}
+        onChange={(e) => handleChange(Number(e.target.value), hi)}
+        onMouseDown={onDragStart}
+        onMouseUp={onDragEnd}
+        onTouchStart={onDragStart}
+        onTouchEnd={onDragEnd}
+        className="absolute top-0 w-full h-2 [appearance:none] bg-transparent outline-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:shadow-lg [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-white/20 z-10"
+      />
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={hi}
+        onChange={(e) => handleChange(lo, Number(e.target.value))}
+        onMouseDown={onDragStart}
+        onMouseUp={onDragEnd}
+        onTouchStart={onDragStart}
+        onTouchEnd={onDragEnd}
+        className="absolute top-0 w-full h-2 [appearance:none] bg-transparent outline-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:shadow-lg [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-white/20 z-20"
+      />
+    </div>
+  );
+}
+
 /*********************************
  * CSV + DATA UTILITIES
  *********************************/
@@ -114,7 +197,7 @@ function mkPoints(pos: number[], col: number[], size: number, opacity: number, e
   geom.setAttribute("color", new THREE.Float32BufferAttribute(new Float32Array(col), 3));
   if (extras?.grade?.length) geom.setAttribute("grade", new THREE.Float32BufferAttribute(new Float32Array(extras.grade), 1));
   if (extras?.conf?.length)  geom.setAttribute("conf",  new THREE.Float32BufferAttribute(new Float32Array(extras.conf), 1));
-  const mat = new THREE.PointsMaterial({ size, sizeAttenuation: true, transparent: true, opacity, vertexColors: true, depthWrite: false });
+  const mat = new THREE.PointsMaterial({ size, sizeAttenuation: false, transparent: true, opacity, vertexColors: true, depthWrite: false });
   return new THREE.Points(geom, mat);
 }
 
@@ -143,15 +226,23 @@ export default function App(){
   const [csvAI, setCsvAI] = useState("");
   const [useAI, setUseAI] = useState(false);
 
-  const [depthCenter, setDepthCenter] = useState(-900);
-  const [sliceThickness, setSliceThickness] = useState<[number]>([200]);
+  const [depthWindow, setDepthWindow] = useState<[number, number]>([-1600, 0]);
+  const [sliceThickness] = useState<[number]>([200]);
   const [gradeRange, setGradeRange] = useState<[number, number]>([0, 40]);
   const [depthRange, setDepthRange] = useState({ min: -1600, max: 0 });
+  const [depthTooltip, setDepthTooltip] = useState<{ x: number; y: number; text: string } | null>(null);
+  const [isDraggingDepth, setIsDraggingDepth] = useState(false);
+  const [thicknessPreset, setThicknessPreset] = useState<'thin' | 'medium' | 'thick' | 'custom'>('medium');
 
   const [hoverTooltip, setHoverTooltip] = useState<{ x: number; y: number; text: string } | null>(null);
   const [selected, setSelected] = useState<{ grade: string; depth: string; conf: string } | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [stats, setStats] = useState({ avgGrade: 0, tonnage: 0, mix: { Measured: 0, Indicated: 0, Inferred: 0 } });
+  
+  // Temporary camera debug controls
+  const [showCameraDebug, setShowCameraDebug] = useState(false);
+  const [cameraPos, setCameraPos] = useState({ x: 2034.8, y: -2575.1, z: 35.7 });
+  const [cameraTarget, setCameraTarget] = useState({ x: -144.4, y: -215.5, z: -328.0 });
 
   // Try to load /3Dmodel.csv if served; else seed a visible synthetic
   useEffect(()=>{
@@ -167,7 +258,7 @@ export default function App(){
     const width = mount.clientWidth, height = mount.clientHeight;
     const camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 20000);
     camera.up.set(0, 0, 1);
-    camera.position.set(1200, 1100, 900);
+    camera.position.set(cameraPos.x, cameraPos.y, cameraPos.z);
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setSize(width, height);
     renderer.setPixelRatio(Math.min(2, (window as any).devicePixelRatio || 1));
@@ -175,7 +266,7 @@ export default function App(){
     mount.appendChild(renderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true; controls.target.set(0, 0, -900);
+    controls.enableDamping = true; controls.target.set(cameraTarget.x, cameraTarget.y, cameraTarget.z);
 
     scene.add(new THREE.AmbientLight(0xffffff, 0.9));
 
@@ -211,16 +302,50 @@ export default function App(){
     for (const z of ticks){ const p1=new THREE.Vector3(min.x,min.y,z); const p2=new THREE.Vector3(min.x+tickLen,min.y,z); const geom=new THREE.BufferGeometry().setFromPoints([p1,p2]); g.add(new THREE.Line(geom,tickMat)); const lbl=makeLabel(`${z} m`,{size:20}); lbl.position.set(min.x - tickLen*0.4, min.y, z); g.add(lbl);} const depthLbl=makeLabel("DEPTH",{size:26}); depthLbl.position.set(min.x - tickLen*0.8, min.y, max.z + 20); g.add(depthLbl);
     // Grid planes
     const gridMat=new THREE.LineBasicMaterial({color:0xffffff,transparent:true,opacity:0.18}); for(const z of ticks){ const rectPts=[ new THREE.Vector3(min.x,min.y,z), new THREE.Vector3(max.x,min.y,z), new THREE.Vector3(max.x,min.y,z), new THREE.Vector3(max.x,max.y,z), new THREE.Vector3(max.x,max.y,z), new THREE.Vector3(min.x,max.y,z), new THREE.Vector3(min.x,max.y,z), new THREE.Vector3(min.x,min.y,z) ]; const rectGeom=new THREE.BufferGeometry().setFromPoints(rectPts); g.add(new THREE.LineSegments(rectGeom,gridMat)); }
-    // Slice planes
-    const planeW=Math.max(1,size.x), planeH=Math.max(1,size.y); const planeGeom=new THREE.PlaneGeometry(planeW,planeH); const planeMat=new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,opacity:0.07,side:THREE.DoubleSide}); const top=new THREE.Mesh(planeGeom,planeMat.clone()); const bot=new THREE.Mesh(planeGeom.clone(),planeMat.clone()); sliceTopRef.current=top; sliceBottomRef.current=bot; g.add(top); g.add(bot);
+    // Slice planes (original subtle style)
+    const planeW=Math.max(1,size.x), planeH=Math.max(1,size.y); 
+    const planeGeom=new THREE.PlaneGeometry(planeW,planeH); 
+    const planeMat=new THREE.MeshBasicMaterial({
+      color:0xffffff,
+      transparent:true,
+      opacity:0.07,
+      side:THREE.DoubleSide
+    }); 
+    const top=new THREE.Mesh(planeGeom,planeMat.clone()); 
+    const bot=new THREE.Mesh(planeGeom.clone(),planeMat.clone()); 
+    
+    sliceTopRef.current=top; 
+    sliceBottomRef.current=bot; 
+    g.add(top); 
+    g.add(bot);
     scene.add(g); frameRef.current=g; if(!viewInitRef.current) controlsRef.current?.target?.copy(center); updateSlicePlanes(bounds);
   }
 
   function updateSlicePlanes(bounds: { min: THREE.Vector3; max: THREE.Vector3; center: THREE.Vector3 }) {
-    const { center, min, max } = bounds; const depthLo = depthCenter - sliceThickness[0] / 2; const depthHi = depthCenter + sliceThickness[0] / 2; const clamp=(z:number)=> Math.min(Math.max(z, Math.min(min.z, max.z)), Math.max(min.z, max.z)); const zTop=clamp(depthHi), zBot=clamp(depthLo); if (sliceTopRef.current) sliceTopRef.current.position.set(center.x, center.y, zTop); if (sliceBottomRef.current) sliceBottomRef.current.position.set(center.x, center.y, zBot);
+    const { center, min, max } = bounds; 
+    const [depthLo, depthHi] = depthWindow; 
+    const clamp=(z:number)=> Math.min(Math.max(z, Math.min(min.z, max.z)), Math.max(min.z, max.z)); 
+    const zTop=clamp(depthHi), zBot=clamp(depthLo); 
+    
+    if (sliceTopRef.current) sliceTopRef.current.position.set(center.x, center.y, zTop); 
+    if (sliceBottomRef.current) sliceBottomRef.current.position.set(center.x, center.y, zBot);
   }
 
-  function resetView(){ const b=boundsRef.current; if(!b||!cameraRef.current||!controlsRef.current) return; const {center,size}=b; const r=size.length()*0.9 + 600; cameraRef.current.position.set(center.x+r, center.y+r*0.6, center.z+r); controlsRef.current.target.copy(center); cameraRef.current.updateProjectionMatrix(); viewInitRef.current=true; }
+  function resetView(){ const b=boundsRef.current; if(!b||!cameraRef.current||!controlsRef.current) return; cameraRef.current.position.set(cameraPos.x, cameraPos.y, cameraPos.z); controlsRef.current.target.set(cameraTarget.x, cameraTarget.y, cameraTarget.z); cameraRef.current.updateProjectionMatrix(); viewInitRef.current=true; }
+  
+  function updateCameraPosition() {
+    if (!cameraRef.current) return;
+    cameraRef.current.position.set(cameraPos.x, cameraPos.y, cameraPos.z);
+    cameraRef.current.updateProjectionMatrix();
+  }
+  
+  function updateCameraDisplay() {
+    if (!cameraRef.current || !controlsRef.current) return;
+    const pos = cameraRef.current.position;
+    const target = controlsRef.current.target;
+    setCameraPos({ x: pos.x, y: pos.y, z: pos.z });
+    setCameraTarget({ x: target.x, y: target.y, z: target.z });
+  }
 
   function rebuild(){
     const scene = sceneRef.current; if (!scene) return;
@@ -228,19 +353,114 @@ export default function App(){
     const csv = useAI ? csvAI : csvKriging; if (!csv) return; const data = normalizeRows(parseCSV(csv));
     if (!data.X.length) { const c=miningHeatColor(0); const fallback = mkPoints([0,0,-1],[c.r,c.g,c.b],2.5,0.9); scene.add(fallback); vividRef.current=fallback; dimRef.current=null; setDepthRange({min:-1,max:-1}); return; }
     const bounds = computeBounds(data); boundsRef.current=bounds; buildFrame(bounds);
-    const zmin=Math.min(bounds.min.z,bounds.max.z); const zmax=Math.max(bounds.min.z,bounds.max.z); if(Number.isFinite(zmin)&&Number.isFinite(zmax)){ setDepthRange(prev => (prev.min!==Math.floor(zmin)||prev.max!==Math.ceil(zmax))?{min:Math.floor(zmin),max:Math.ceil(zmax)}:prev); if (depthCenter<zmin||depthCenter>zmax) setDepthCenter(Math.max(zmin,Math.min(zmax,depthCenter))); }
+    const zmin=Math.min(bounds.min.z,bounds.max.z); const zmax=Math.max(bounds.min.z,bounds.max.z); 
+    if(Number.isFinite(zmin)&&Number.isFinite(zmax)){
+      setDepthRange(prev => (prev.min!==Math.floor(zmin)||prev.max!==Math.ceil(zmax))?{min:Math.floor(zmin),max:Math.ceil(zmax)}:prev); 
+      // Initialize depth window to full range if not set
+      if (depthWindow[0] < zmin || depthWindow[1] > zmax) {
+        setDepthWindow([zmin, zmax]);
+      }
+    }
     if (!viewInitRef.current) resetView();
-    const depthLo=depthCenter - sliceThickness[0]/2; const depthHi=depthCenter + sliceThickness[0]/2; const [g0,g1]=gradeRange; const gMin=Math.min(g0,g1), gMax=Math.max(g0,g1);
+    const [depthLo, depthHi] = depthWindow; const [g0,g1]=gradeRange; const gMin=Math.min(g0,g1), gMax=Math.max(g0,g1);
     const vivPos:number[]=[], vivCol:number[]=[], vivGrade:number[]=[], vivConf:number[]=[]; const dimPos:number[]=[], dimCol:number[]=[]; let sumGrade=0,count=0; const mix:any={Measured:0,Indicated:0,Inferred:0}; const confCode:Record<string,number>={Measured:0,Indicated:1,Inferred:2};
     for(let i=0;i<data.X.length;i++){ const x=data.X[i], y=data.Y[i], z=data.Z[i], a=data.A[i]; const conf=data.C[i]; const inDepth = z>=depthLo && z<=depthHi; const inGrade = a>=gMin && a<=gMax; const col=miningHeatColor(a); if(inDepth && inGrade){ vivPos.push(x,y,z); vivCol.push(col.r,col.g,col.b); vivGrade.push(a); vivConf.push(confCode[conf]??1); sumGrade+=a; count++; mix[conf]=(mix[conf]||0)+1; } else { const g=0.28; dimPos.push(x,y,z); dimCol.push(g,g,g); } }
     const vivid = mkPoints(vivPos,vivCol,3.0,0.95,{grade:vivGrade,conf:vivConf}); const dim = mkPoints(dimPos,dimCol,1.8,0.18); scene.add(dim); scene.add(vivid); vividRef.current=vivid; dimRef.current=dim; const tonPerPoint=100; const avg = count? (sumGrade/count):0; setStats({avgGrade:avg, tonnage: count*tonPerPoint, mix}); updateSlicePlanes(bounds);
   }
 
-  useEffect(()=>{ rebuild(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [csvKriging,csvAI,useAI,depthCenter,sliceThickness,gradeRange]);
+  useEffect(()=>{ rebuild(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [csvKriging,csvAI,useAI,depthWindow,sliceThickness,gradeRange]);
+  
+  // Update camera position when debug controls change
+  useEffect(() => {
+    updateCameraPosition();
+  }, [cameraPos]);
+  
+  // Update camera display when camera moves (from orbit controls)
+  useEffect(() => {
+    if (!showCameraDebug || !controlsRef.current) return;
+    
+    const controls = controlsRef.current;
+    const handleChange = () => {
+      updateCameraDisplay();
+    };
+    
+    controls.addEventListener('change', handleChange);
+    return () => controls.removeEventListener('change', handleChange);
+  }, [showCameraDebug]);
+
+  // Keyboard accessibility for depth slider
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.target !== document.body) return; // Only when no input is focused
+      
+      const step = e.shiftKey ? 10 : 1;
+      const [currentLo, currentHi] = depthWindow;
+      
+      switch (e.key) {
+        case 'ArrowUp':
+          e.preventDefault();
+          setDepthWindow([currentLo + step, currentHi + step]);
+          break;
+        case 'ArrowDown':
+          e.preventDefault();
+          setDepthWindow([currentLo - step, currentHi - step]);
+          break;
+        case 'ArrowLeft':
+          e.preventDefault();
+          setDepthWindow([currentLo - step, currentHi]);
+          break;
+        case 'ArrowRight':
+          e.preventDefault();
+          setDepthWindow([currentLo, currentHi + step]);
+          break;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [depthWindow]);
+
+  // Thickness presets
+  const thicknessPresets = {
+    thin: 10,
+    medium: 30,
+    thick: 60
+  };
+
+  const applyThicknessPreset = (preset: 'thin' | 'medium' | 'thick') => {
+    const thickness = thicknessPresets[preset];
+    const center = (depthWindow[0] + depthWindow[1]) / 2;
+    const halfThickness = thickness / 2;
+    setDepthWindow([center - halfThickness, center + halfThickness]);
+    setThicknessPreset(preset);
+  };
 
   // Hover + click
-  useEffect(()=>{ if(!domReady) return; const mount=mountRef.current; const scene=sceneRef.current; if(!mount||!scene) return; const raycaster=new THREE.Raycaster(); (raycaster as any).params.Points={threshold:8}; function onMove(e:MouseEvent){ const rect=mount.getBoundingClientRect(); const x=((e.clientX-rect.left)/rect.width)*2-1; const y=-((e.clientY-rect.top)/rect.height)*2+1; raycaster.setFromCamera({x,y} as any, cameraRef.current!); const hits=raycaster.intersectObjects([vividRef.current!].filter(Boolean),true); if(hits&&hits.length){ const i=(hits[0] as any).index??0; const gAttr=(vividRef.current as any).geometry.getAttribute("grade"); const grade=gAttr?gAttr.getX(i):undefined; const txt=grade!==undefined?`${grade.toFixed(2)} g/T`:"grade"; setHoverTooltip({x:e.clientX,y:e.clientY,text:txt}); } else setHoverTooltip(null);} function onClick(e:MouseEvent){ const rect=mount.getBoundingClientRect(); const x=((e.clientX-rect.left)/rect.width)*2-1; const y=-((e.clientY-rect.top)/rect.height)*2+1; const rc=new THREE.Raycaster(); (rc as any).params.Points={threshold:8}; rc.setFromCamera({x,y} as any, cameraRef.current!); const hits=rc.intersectObjects([vividRef.current!].filter(Boolean),true); if(hits&&hits.length){ const i=(hits[0] as any).index??0; const pos=(vividRef.current as any).geometry.getAttribute("position"); const gAttr=(vividRef.current as any).geometry.getAttribute("grade"); const cAttr=(vividRef.current as any).geometry.getAttribute("conf"); const depth=Math.round(pos.getZ(i)); const grade=gAttr?gAttr.getX(i):undefined; const confIdx=cAttr?Math.round(cAttr.getX(i)):1; const confLabel=confIdx===0?"Measured":confIdx===1?"Indicated":"Inferred"; setSelected({grade: grade!==undefined?`${grade.toFixed(2)} g/T`:"—", depth:`${depth} m`, conf:confLabel}); setDrawerOpen(true); if(highlightRef.current){ scene.remove(highlightRef.current); (highlightRef.current as any).geometry.dispose(); (highlightRef.current as any).material.dispose(); highlightRef.current=null; } const p=new THREE.Vector3(pos.getX(i),pos.getY(i),pos.getZ(i)); const sph=new THREE.Mesh(new THREE.SphereGeometry(6,16,16), new THREE.MeshBasicMaterial({color:0xffffff})); sph.position.copy(p); scene.add(sph); highlightRef.current=sph; } }
-    mount.addEventListener("mousemove",onMove); mount.addEventListener("click",onClick); return()=>{ mount.removeEventListener("mousemove",onMove); mount.removeEventListener("click",onClick); } },[domReady]);
+  useEffect(()=>{ if(!domReady) return; const mount=mountRef.current; const scene=sceneRef.current; if(!mount||!scene) return; const raycaster=new THREE.Raycaster(); (raycaster as any).params.Points={threshold:8}; function onMove(e:MouseEvent){ const rect=mount.getBoundingClientRect(); const x=((e.clientX-rect.left)/rect.width)*2-1; const y=-((e.clientY-rect.top)/rect.height)*2+1; raycaster.setFromCamera({x,y} as any, cameraRef.current!); const hits=raycaster.intersectObjects([vividRef.current!].filter(Boolean),true); if(hits&&hits.length){ const i=(hits[0] as any).index??0; const gAttr=(vividRef.current as any).geometry.getAttribute("grade"); const grade=gAttr?gAttr.getX(i):undefined; const txt=grade!==undefined?`${grade.toFixed(2)} g/T`:"grade"; setHoverTooltip({x:e.clientX,y:e.clientY,text:txt}); } else setHoverTooltip(null);} function onClick(e:MouseEvent){ const rect=mount.getBoundingClientRect(); const x=((e.clientX-rect.left)/rect.width)*2-1; const y=-((e.clientY-rect.top)/rect.height)*2+1; const rc=new THREE.Raycaster(); (rc as any).params.Points={threshold:8}; rc.setFromCamera({x,y} as any, cameraRef.current!); const hits=rc.intersectObjects([vividRef.current!].filter(Boolean),true); if(hits&&hits.length){ const i=(hits[0] as any).index??0; const pos=(vividRef.current as any).geometry.getAttribute("position"); const gAttr=(vividRef.current as any).geometry.getAttribute("grade"); const cAttr=(vividRef.current as any).geometry.getAttribute("conf"); const depth=Math.round(pos.getZ(i)); const grade=gAttr?gAttr.getX(i):undefined; const confIdx=cAttr?Math.round(cAttr.getX(i)):1; const confLabel=confIdx===0?"Measured":confIdx===1?"Indicated":"Inferred"; setSelected({grade: grade!==undefined?`${grade.toFixed(2)} g/T`:"—", depth:`${depth} m`, conf:confLabel}); setDrawerOpen(true); if(highlightRef.current && scene){ scene.remove(highlightRef.current); (highlightRef.current as any).geometry.dispose(); (highlightRef.current as any).material.dispose(); highlightRef.current=null; } const p=new THREE.Vector3(pos.getX(i),pos.getY(i),pos.getZ(i)); const sph=new THREE.Mesh(new THREE.SphereGeometry(6,16,16), new THREE.MeshBasicMaterial({color:0xffffff})); sph.position.copy(p); if(scene) scene.add(sph); highlightRef.current=sph; } }
+    if(mount) { 
+      mount.addEventListener("mousemove",onMove); 
+      mount.addEventListener("click",onClick); 
+      return()=>{ 
+        if(mount) {
+          mount.removeEventListener("mousemove",onMove); 
+          mount.removeEventListener("click",onClick); 
+        }
+      } 
+    } },[domReady]);
+
+  // Depth slider tooltip
+  const handleDepthSliderChange = (newValue: [number, number]) => {
+    setDepthWindow(newValue);
+    if (isDraggingDepth) {
+      const [lo, hi] = newValue;
+      const thickness = hi - lo;
+      setDepthTooltip({
+        x: 0, // Will be set by mouse position
+        y: 0,
+        text: `Window: ${Math.round(lo)}–${Math.round(hi)} m (${Math.round(thickness)} m thick)`
+      });
+    }
+  };
 
   // Legend
   function Legend(){ useEffect(()=>{ const canvas=document.getElementById("legendCanvas") as HTMLCanvasElement|null; if(!canvas) return; const ctx=canvas.getContext("2d")!; for(let i=0;i<canvas.height;i++){ const t=1 - i/(canvas.height-1); const c=miningHeatColor(t*MAX_GRADE); ctx.fillStyle=`rgb(${Math.round(c.r*255)},${Math.round(c.g*255)},${Math.round(c.b*255)})`; ctx.fillRect(0,i,canvas.width,1);} ctx.fillStyle="#fff"; ctx.globalAlpha=0.8; ctx.font="10px Inter"; ctx.fillText("40",18,10); ctx.fillText("20",18,canvas.height/2+3); ctx.fillText("0",18,canvas.height-2); ctx.globalAlpha=1; },[]); return (<div className="pointer-events-none select-none text-xs text-white/80"><div className="mb-1">g/T</div><div className="flex items-center gap-2"><canvas id="legendCanvas" width={16} height={120} className="rounded"/></div><div className="mt-1">Low → High</div></div>); }
@@ -253,19 +473,78 @@ export default function App(){
       <div className="relative w-full h-[78vh] lg:h-[82vh]">
         <div ref={(el)=>{mountRef.current=el; if(el) setDomReady(true);}} className="absolute inset-0 rounded-2xl overflow-hidden bg-neutral-900/40"/>
 
-        {/* Left controls: Depth & Slice */}
-        <div className="absolute left-4 top-1/2 -translate-y-1/2 flex flex-col items-center gap-2">
-          <div className="text-xs text-white/70">Depth</div>
-          <div className="relative h-64 w-10 flex flex-col items-center">
-            <div className="text-[10px] text-white/60 -mb-1">{Math.round(depthRange.max)} m</div>
-            <div className="relative h-56 w-8">
-              <input type="range" min={depthRange.min} max={depthRange.max} step={10} value={depthCenter} onChange={(e)=>setDepthCenter(Number(e.target.value))} className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-56 h-4 -rotate-90 transform [appearance:none] [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-runnable-track]:bg-white/20 [&::-webkit-slider-runnable-track]:rounded"/>
+        {/* Left controls: Depth Range & Thickness */}
+        <div className="absolute left-4 top-1/2 -translate-y-1/2 flex flex-col items-center gap-4">
+          <Card className="p-4 bg-black/50 backdrop-blur">
+            <div className="text-center mb-3">
+              <div className="text-sm text-white/90 font-medium">Depth Window</div>
+              <div className="text-xs text-white/60">
+                {Math.round(depthWindow[0])}–{Math.round(depthWindow[1])} m
+              </div>
+              <div className="text-[10px] text-white/50">
+                Thickness: {Math.round(depthWindow[1] - depthWindow[0])} m
+              </div>
             </div>
-            <div className="text-[10px] text-white/60 -mt-1">{Math.round(depthRange.min)} m</div>
-          </div>
-          <div className="text-xs text-white/80">{Math.round(depthCenter)} m</div>
-          <div className="w-24 text-[10px] text-white/60">Slice ± {Math.round(sliceThickness[0]/2)} m</div>
-          <div className="w-24"><input type="range" min={40} max={400} step={10} value={sliceThickness[0]} onChange={(e)=>setSliceThickness([Number(e.target.value)])} className="w-full [appearance:none] h-1 rounded bg-white/20 outline-none [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white"/></div>
+            
+            {/* Depth Range Slider */}
+            <div className="w-64 mb-4">
+              <DepthRangeSlider
+                value={depthWindow}
+                min={depthRange.min}
+                max={depthRange.max}
+                step={1}
+                onChange={handleDepthSliderChange}
+                onDragStart={() => setIsDraggingDepth(true)}
+                onDragEnd={() => {
+                  setIsDraggingDepth(false);
+                  setDepthTooltip(null);
+                }}
+                tooltip={isDraggingDepth ? depthTooltip : null}
+              />
+              <div className="flex justify-between text-[10px] text-white/50 mt-1">
+                <span>{Math.round(depthRange.min)} m</span>
+                <span>{Math.round(depthRange.max)} m</span>
+              </div>
+            </div>
+
+            {/* Thickness Presets */}
+            <div className="space-y-2">
+              <div className="text-xs text-white/70 text-center">Thickness Presets</div>
+              <div className="flex gap-1">
+                <Button
+                  size="sm"
+                  variant={thicknessPreset === 'thin' ? 'outline' : 'ghost'}
+                  onClick={() => applyThicknessPreset('thin')}
+                  className="text-[10px] px-2 py-1"
+                >
+                  Thin (10m)
+                </Button>
+                <Button
+                  size="sm"
+                  variant={thicknessPreset === 'medium' ? 'outline' : 'ghost'}
+                  onClick={() => applyThicknessPreset('medium')}
+                  className="text-[10px] px-2 py-1"
+                >
+                  Med (30m)
+                </Button>
+                <Button
+                  size="sm"
+                  variant={thicknessPreset === 'thick' ? 'outline' : 'ghost'}
+                  onClick={() => applyThicknessPreset('thick')}
+                  className="text-[10px] px-2 py-1"
+                >
+                  Thick (60m)
+                </Button>
+              </div>
+            </div>
+
+            {/* Keyboard Help */}
+            <div className="mt-3 text-[10px] text-white/40 text-center">
+              Use ↑/↓ to move window, ←/→ to adjust bounds
+              <br />
+              Shift + arrows for 10m steps
+            </div>
+          </Card>
         </div>
 
         {/* Grade slider bottom */}
@@ -289,6 +568,58 @@ export default function App(){
 
         {/* Legend */}
         <div className="absolute top-4 right-52 bg-black/50 backdrop-blur px-3 py-2 rounded-xl border border-white/10"><Legend/></div>
+        
+        {/* Camera Debug Panel */}
+        {showCameraDebug && (
+          <div className="absolute top-4 left-4 bg-black/70 backdrop-blur px-4 py-3 rounded-xl border border-white/20 max-w-xs">
+            <div className="flex items-center justify-between mb-3">
+              <div className="text-sm font-medium text-white">Camera Debug</div>
+              <Button size="sm" onClick={() => setShowCameraDebug(false)} className="text-xs">×</Button>
+            </div>
+            
+            <div className="space-y-3 text-xs">
+              <div className="bg-white/5 rounded-lg p-3">
+                <div className="text-white/60 mb-2">Camera Position:</div>
+                <div className="text-white/80 font-mono text-[10px] leading-tight">
+                  X: {cameraPos.x.toFixed(1)}<br/>
+                  Y: {cameraPos.y.toFixed(1)}<br/>
+                  Z: {cameraPos.z.toFixed(1)}
+                </div>
+              </div>
+              
+              <div className="bg-white/5 rounded-lg p-3">
+                <div className="text-white/60 mb-2">Camera Target:</div>
+                <div className="text-white/80 font-mono text-[10px] leading-tight">
+                  X: {cameraTarget.x.toFixed(1)}<br/>
+                  Y: {cameraTarget.y.toFixed(1)}<br/>
+                  Z: {cameraTarget.z.toFixed(1)}
+                </div>
+              </div>
+              
+              <div className="pt-2 border-t border-white/10">
+                <div className="text-white/60 mb-2 text-[10px]">
+                  Navigate with mouse to see coordinates update in real-time
+                </div>
+              </div>
+              
+              <div className="flex gap-2 pt-2">
+                <Button size="sm" onClick={resetView} className="text-xs">Auto View</Button>
+                <Button size="sm" onClick={() => {
+                  if (cameraRef.current && controlsRef.current) {
+                    updateCameraDisplay();
+                  }
+                }} className="text-xs">Refresh</Button>
+              </div>
+            </div>
+          </div>
+        )}
+        
+        {/* Show Camera Debug Button */}
+        {!showCameraDebug && (
+          <Button onClick={() => setShowCameraDebug(true)} className="absolute top-4 left-4 text-xs">
+            Camera Debug
+          </Button>
+        )}
 
         {/* Hover tooltip */}
         {hoverTooltip && (<div style={{left:hoverTooltip.x+10, top:hoverTooltip.y+10}} className="pointer-events-none absolute z-10 text-[11px] px-2 py-1 rounded bg-black/80 border border-white/10">{hoverTooltip.text}</div>)}
@@ -307,8 +638,11 @@ export default function App(){
             <div className="bg-white/5 rounded-xl p-3"><div className="text-white/60 text-xs">Confidence</div><div className="text-lg">{selected?.conf||"—"}</div></div>
           </div>
           <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
-            <div className="bg-white/5 rounded-xl p-3"><div className="text-white/60 text-xs">Avg Grade (filtered)</div><div className="text-lg">{stats.avgGrade.toFixed(1)} g/T</div></div>
-            <div className="bg-white/5 rounded-xl p-3"><div className="text-white/60 text-xs">Visible Tonnage (est.)</div><div className="text-lg">~{Math.round(stats.tonnage).toLocaleString()} tons</div></div>
+            <div className="bg-white/5 rounded-xl p-3"><div className="text-white/60 text-xs">Depth Window</div><div className="text-lg">{Math.round(depthWindow[0])}–{Math.round(depthWindow[1])} m</div></div>
+            <div className="bg-white/5 rounded-xl p-3"><div className="text-white/60 text-xs">Visible Tonnage</div><div className="text-lg">~{Math.round(stats.tonnage).toLocaleString()} tons</div></div>
+            <div className="bg-white/5 rounded-xl p-3"><div className="text-white/60 text-xs">Avg Grade</div><div className="text-lg">{stats.avgGrade.toFixed(1)} g/T</div></div>
+          </div>
+          <div className="mt-3 grid grid-cols-1 sm:grid-cols-1 gap-3 text-sm">
             <div className="bg-white/5 rounded-xl p-3"><div className="text-white/60 text-xs">Confidence Mix</div><div className="text-sm">{`${Math.round((stats.mix.Measured || 0) / Math.max(1, (stats.mix.Measured || 0) + (stats.mix.Indicated || 0) + (stats.mix.Inferred || 0)) * 100) || 0}% Measured / ${Math.round((stats.mix.Indicated || 0) / Math.max(1, (stats.mix.Measured || 0) + (stats.mix.Indicated || 0) + (stats.mix.Inferred || 0)) * 100) || 0}% Indicated / ${Math.round((stats.mix.Inferred || 0) / Math.max(1, (stats.mix.Measured || 0) + (stats.mix.Indicated || 0) + (stats.mix.Inferred || 0)) * 100) || 0}% Inferred`}</div></div>
           </div>
         </Card>
