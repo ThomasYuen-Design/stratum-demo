@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
 
@@ -14,21 +14,307 @@ function Button({ className = "", children, onClick, variant="ghost", size="sm" 
   const sizes=size==="sm"?"" : " px-4 py-2";
   return <button onClick={onClick} className={`${base} ${styles} ${sizes} ${className}`}>{children}</button>;
 }
-function TwoHandleSlider({ value, min=0, max=100, step=1, onChange }: {value:[number,number],min?:number,max?:number,step?:number,onChange:(v:[number,number])=>void}){
-  const [lo,hi]=value; const clamp=(v:number)=>Math.max(min,Math.min(max,v));
+
+function VerticalGradeRangeSlider({ 
+  value, 
+  min = 0, 
+  max = 40, 
+  step = 1, 
+  onChange, 
+  onDragStart,
+  onDragEnd,
+  tooltip
+}: {
+  value: [number, number];
+  min?: number;
+  max?: number;
+  step?: number;
+  onChange: (v: [number, number]) => void;
+  onDragStart?: () => void;
+  onDragEnd?: () => void;
+  tooltip?: { x: number; y: number; text: string } | null;
+}) {
+  const [lo, hi] = value;
+  const [isDragging, setIsDragging] = useState<"min" | "max" | "range" | null>(null);
+  const [dragOffset, setDragOffset] = useState(0);
+  const [hoveredHandle, setHoveredHandle] = useState<"min" | "max" | null>(null);
+  const [showTooltip, setShowTooltip] = useState<"min" | "max" | null>(null);
+  
+  const sliderRef = useRef<HTMLDivElement>(null);
+  const trackHeight = 200; // Height for the vertical slider
+
+  // Convert value to position (0-1) - for vertical slider (top = min, bottom = max)
+  const valueToPosition = useCallback(
+    (value: number) => {
+      return (value - min) / (max - min);
+    },
+    [min, max],
+  );
+
+  // Convert position to value
+  const positionToValue = useCallback(
+    (position: number) => {
+      const value = min + position * (max - min);
+      return Math.round(value / step) * step;
+    },
+    [min, max, step],
+  );
+
+  // Get position from mouse/touch event
+  const getPositionFromEvent = useCallback(
+    (event: MouseEvent | TouchEvent) => {
+      if (!sliderRef.current) return 0;
+
+      const rect = sliderRef.current.getBoundingClientRect();
+      const clientY =
+        "touches" in event
+          ? event.touches[0].clientY
+          : event.clientY;
+      const relativeY = clientY - rect.top;
+      // Invert for vertical slider (top = max, bottom = min)
+      return Math.max(
+        0,
+        Math.min(1, 1 - relativeY / trackHeight),
+      );
+    },
+    [],
+  );
+
+  // Handle mouse/touch start
+  const handleStart = useCallback(
+    (
+      event: React.MouseEvent | React.TouchEvent,
+      type: "min" | "max",
+    ) => {
+      event.preventDefault();
+      setIsDragging(type);
+      setShowTooltip(type);
+      onDragStart?.();
+
+      const position = getPositionFromEvent(event.nativeEvent);
+      const currentValue = type === "min" ? lo : hi;
+      const currentPosition = valueToPosition(currentValue);
+      setDragOffset(position - currentPosition);
+    },
+    [lo, hi, valueToPosition, getPositionFromEvent, onDragStart],
+  );
+
+  // Handle range drag start
+  const handleRangeStart = useCallback(
+    (event: React.MouseEvent | React.TouchEvent) => {
+      event.preventDefault();
+      setIsDragging("range");
+      setShowTooltip("min");
+      onDragStart?.();
+
+      const position = getPositionFromEvent(event.nativeEvent);
+      const minPosition = valueToPosition(lo);
+      setDragOffset(position - minPosition);
+    },
+    [lo, valueToPosition, getPositionFromEvent, onDragStart],
+  );
+
+  // Handle mouse/touch move
+  useEffect(() => {
+    const handleMove = (event: MouseEvent | TouchEvent) => {
+      if (!isDragging) return;
+
+      const position = getPositionFromEvent(event);
+
+      if (isDragging === "min") {
+        const newValue = positionToValue(position - dragOffset);
+        const clampedValue = Math.max(
+          min,
+          Math.min(newValue, hi - step),
+        );
+        onChange([clampedValue, hi]);
+      } else if (isDragging === "max") {
+        const newValue = positionToValue(position - dragOffset);
+        const clampedValue = Math.min(
+          max,
+          Math.max(newValue, lo + step),
+        );
+        onChange([lo, clampedValue]);
+      } else if (isDragging === "range") {
+        const rangeDiff = hi - lo;
+        const newMinValue = positionToValue(
+          position - dragOffset,
+        );
+        const clampedMinValue = Math.max(
+          min,
+          Math.min(newMinValue, max - rangeDiff),
+        );
+        const newMaxValue = clampedMinValue + rangeDiff;
+
+        onChange([clampedMinValue, newMaxValue]);
+      }
+    };
+
+    const handleEnd = () => {
+      setIsDragging(null);
+      setShowTooltip(null);
+      setDragOffset(0);
+      onDragEnd?.();
+    };
+
+    if (isDragging) {
+      document.addEventListener("mousemove", handleMove);
+      document.addEventListener("mouseup", handleEnd);
+      document.addEventListener("touchmove", handleMove);
+      document.addEventListener("touchend", handleEnd);
+    }
+
+    return () => {
+      document.removeEventListener("mousemove", handleMove);
+      document.removeEventListener("mouseup", handleEnd);
+      document.removeEventListener("touchmove", handleMove);
+      document.removeEventListener("touchend", handleEnd);
+    };
+  }, [
+    isDragging,
+    dragOffset,
+    lo,
+    hi,
+    getPositionFromEvent,
+    positionToValue,
+    min,
+    max,
+    step,
+    onChange,
+    onDragEnd,
+  ]);
+
+  const minPosition = valueToPosition(lo);
+  const maxPosition = valueToPosition(hi);
+
   return (
-    <div className="relative w-64">
-      <input type="range" min={min} max={max} step={step} value={lo}
-        onChange={(e)=>{ const v=clamp(Number(e.target.value)); onChange([Math.min(v,hi), hi]); }}
-        className="w-full [appearance:none] h-1 rounded bg-white/20 outline-none [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white"/>
-      <input type="range" min={min} max={max} step={step} value={hi}
-        onChange={(e)=>{ const v=clamp(Number(e.target.value)); onChange([lo, Math.max(v,lo)]); }}
-        className="w-full -mt-4 [appearance:none] h-1 rounded bg-transparent outline-none [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white"/>
+    <div className="relative">
+      {/* Tooltip */}
+      {tooltip && (
+        <div 
+          style={{ left: tooltip.x + 10, top: tooltip.y - 30 }}
+          className="absolute z-20 pointer-events-none text-xs px-2 py-1 rounded bg-black/90 border border-white/20 whitespace-nowrap"
+        >
+          {tooltip.text}
+        </div>
+      )}
+
+      <div
+        className="h-[200px] relative shrink-0 w-[24px]"
+        data-name="Slider"
+      >
+        {/* Background track with grade gradient */}
+        <div className="absolute flex h-[200px] items-center justify-center left-0 right-0 top-0">
+          <div className="flex-none h-[24px] rotate-[90deg] w-[200px]">
+            <div
+              className="rounded-[6px] size-full"
+              style={{
+                background: `linear-gradient(to left, 
+                  #0F0201 0%, 
+                  #DE2216 25%, 
+                  #EACE55 40%, 
+                  #EBDC5A 49%, 
+                  #FEFEFF 70%, 
+                  #9AC2FB 100%)`,
+              }}
+              data-name="Slider-background"
+            />
+          </div>
+        </div>
+
+        {/* Track progress container */}
+        <div
+          ref={sliderRef}
+          className="absolute box-border content-stretch flex flex-col h-[200px] items-center justify-between left-px rounded-[4.5px] top-0 w-[22px] cursor-pointer"
+          data-name="track progress"
+        >
+          {/* Range highlight - simple white/gray gradient */}
+          <div
+            className="absolute bg-gradient-to-r from-[rgba(255,255,255,0.83)] to-[rgba(229,229,229,0.83)] rounded-[4.5px] w-full transition-all duration-150"
+            style={{
+              bottom: `${minPosition * 100}%`,
+              height: `${(maxPosition - minPosition) * 100}%`,
+            }}
+            onMouseDown={handleRangeStart}
+            onTouchStart={handleRangeStart}
+          />
+
+          {/* Min handle (bottom) */}
+          <div
+            className={`absolute bg-white h-[9px] rounded-[4px] w-full cursor-grab transition-all duration-150 ${
+              isDragging === "min"
+                ? "cursor-grabbing scale-110"
+                : ""
+            } ${hoveredHandle === "min" ? "shadow-lg" : ""}`}
+            style={{
+              bottom: `calc(${minPosition * 100}% - 4.5px)`,
+              transform:
+                isDragging === "min" ? "scale(1.1)" : "scale(1)",
+            }}
+            onMouseDown={(e) => handleStart(e, "min")}
+            onTouchStart={(e) => handleStart(e, "min")}
+            onMouseEnter={() => setHoveredHandle("min")}
+            onMouseLeave={() => setHoveredHandle(null)}
+            data-name="Lower handle thumb"
+          >
+            <div
+              aria-hidden="true"
+              className={`absolute border-[#707070] border-[0.7px] border-solid inset-0 pointer-events-none rounded-[4px] transition-shadow duration-150 ${
+                isDragging === "min" || hoveredHandle === "min"
+                  ? "shadow-[0px_6px_8px_-1px_rgba(10,13,18,0.15),0px_4px_6px_-2px_rgba(10,13,18,0.1)]"
+                  : "shadow-[0px_4px_6px_-1px_rgba(10,13,18,0.1),0px_2px_4px_-2px_rgba(10,13,18,0.06)]"
+              }`}
+            />
+
+            {/* Tooltip for min handle */}
+            {showTooltip === "min" && (
+              <div className="absolute left-full ml-2 top-1/2 -translate-y-1/2 bg-black text-white px-2 py-1 rounded text-xs whitespace-nowrap z-10">
+                {lo} g/T
+              </div>
+            )}
+          </div>
+
+          {/* Max handle (top) */}
+          <div
+            className={`absolute bg-white h-[9px] rounded-[4px] w-full cursor-grab transition-all duration-150 ${
+              isDragging === "max"
+                ? "cursor-grabbing scale-110"
+                : ""
+            } ${hoveredHandle === "max" ? "shadow-lg" : ""}`}
+            style={{
+              bottom: `calc(${maxPosition * 100}% - 4.5px)`,
+              transform:
+                isDragging === "max" ? "scale(1.1)" : "scale(1)",
+            }}
+            onMouseDown={(e) => handleStart(e, "max")}
+            onTouchStart={(e) => handleStart(e, "max")}
+            onMouseEnter={() => setHoveredHandle("max")}
+            onMouseLeave={() => setHoveredHandle(null)}
+            data-name="Upper handle thumb"
+          >
+            <div
+              aria-hidden="true"
+              className={`absolute border-[#707070] border-[0.7px] border-solid inset-0 pointer-events-none rounded-[4px] transition-shadow duration-150 ${
+                isDragging === "max" || hoveredHandle === "max"
+                  ? "shadow-[0px_6px_8px_-1px_rgba(10,13,18,0.15),0px_4px_6px_-2px_rgba(10,13,18,0.1)]"
+                  : "shadow-[0px_4px_6px_-1px_rgba(10,13,18,0.1),0px_2px_4px_-2px_rgba(10,13,18,0.06)]"
+              }`}
+            />
+
+            {/* Tooltip for max handle */}
+            {showTooltip === "max" && (
+              <div className="absolute left-full ml-2 top-1/2 -translate-y-1/2 bg-black text-white px-2 py-1 rounded text-xs whitespace-nowrap z-10">
+                {hi} g/T
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
 
-function DepthRangeSlider({ 
+function VerticalDepthRangeSlider({ 
   value, 
   min = 0, 
   max = 100, 
@@ -48,13 +334,157 @@ function DepthRangeSlider({
   tooltip?: { x: number; y: number; text: string } | null;
 }) {
   const [lo, hi] = value;
-  const clamp = (v: number) => Math.max(min, Math.min(max, v));
+  const [isDragging, setIsDragging] = useState<"min" | "max" | "range" | null>(null);
+  const [dragOffset, setDragOffset] = useState(0);
+  const [hoveredHandle, setHoveredHandle] = useState<"min" | "max" | null>(null);
+  const [showTooltip, setShowTooltip] = useState<"min" | "max" | null>(null);
   
-  const handleChange = (newLo: number, newHi: number) => {
-    const clampedLo = clamp(newLo);
-    const clampedHi = clamp(newHi);
-    onChange([Math.min(clampedLo, clampedHi), Math.max(clampedLo, clampedHi)]);
-  };
+  const sliderRef = useRef<HTMLDivElement>(null);
+  const trackHeight = 200; // Height for the vertical slider
+
+  // Convert value to position (0-1) - for vertical slider (top = min, bottom = max)
+  const valueToPosition = useCallback(
+    (value: number) => {
+      return (value - min) / (max - min);
+    },
+    [min, max],
+  );
+
+  // Convert position to value
+  const positionToValue = useCallback(
+    (position: number) => {
+      const value = min + position * (max - min);
+      return Math.round(value / step) * step;
+    },
+    [min, max, step],
+  );
+
+  // Get position from mouse/touch event
+  const getPositionFromEvent = useCallback(
+    (event: MouseEvent | TouchEvent) => {
+      if (!sliderRef.current) return 0;
+
+      const rect = sliderRef.current.getBoundingClientRect();
+      const clientY =
+        "touches" in event
+          ? event.touches[0].clientY
+          : event.clientY;
+      const relativeY = clientY - rect.top;
+      // Invert for vertical slider (top = max, bottom = min)
+      return Math.max(
+        0,
+        Math.min(1, 1 - relativeY / trackHeight),
+      );
+    },
+    [],
+  );
+
+  // Handle mouse/touch start
+  const handleStart = useCallback(
+    (
+      event: React.MouseEvent | React.TouchEvent,
+      type: "min" | "max",
+    ) => {
+      event.preventDefault();
+      setIsDragging(type);
+      setShowTooltip(type);
+      onDragStart?.();
+
+      const position = getPositionFromEvent(event.nativeEvent);
+      const currentValue = type === "min" ? lo : hi;
+      const currentPosition = valueToPosition(currentValue);
+      setDragOffset(position - currentPosition);
+    },
+    [lo, hi, valueToPosition, getPositionFromEvent, onDragStart],
+  );
+
+  // Handle range drag start
+  const handleRangeStart = useCallback(
+    (event: React.MouseEvent | React.TouchEvent) => {
+      event.preventDefault();
+      setIsDragging("range");
+      setShowTooltip("min");
+      onDragStart?.();
+
+      const position = getPositionFromEvent(event.nativeEvent);
+      const minPosition = valueToPosition(lo);
+      setDragOffset(position - minPosition);
+    },
+    [lo, valueToPosition, getPositionFromEvent, onDragStart],
+  );
+
+  // Handle mouse/touch move
+  useEffect(() => {
+    const handleMove = (event: MouseEvent | TouchEvent) => {
+      if (!isDragging) return;
+
+      const position = getPositionFromEvent(event);
+
+      if (isDragging === "min") {
+        const newValue = positionToValue(position - dragOffset);
+        const clampedValue = Math.max(
+          min,
+          Math.min(newValue, hi - step),
+        );
+        onChange([clampedValue, hi]);
+      } else if (isDragging === "max") {
+        const newValue = positionToValue(position - dragOffset);
+        const clampedValue = Math.min(
+          max,
+          Math.max(newValue, lo + step),
+        );
+        onChange([lo, clampedValue]);
+      } else if (isDragging === "range") {
+        const rangeDiff = hi - lo;
+        const newMinValue = positionToValue(
+          position - dragOffset,
+        );
+        const clampedMinValue = Math.max(
+          min,
+          Math.min(newMinValue, max - rangeDiff),
+        );
+        const newMaxValue = clampedMinValue + rangeDiff;
+
+        onChange([clampedMinValue, newMaxValue]);
+      }
+    };
+
+    const handleEnd = () => {
+      setIsDragging(null);
+      setShowTooltip(null);
+      setDragOffset(0);
+      onDragEnd?.();
+    };
+
+    if (isDragging) {
+      document.addEventListener("mousemove", handleMove);
+      document.addEventListener("mouseup", handleEnd);
+      document.addEventListener("touchmove", handleMove);
+      document.addEventListener("touchend", handleEnd);
+    }
+
+    return () => {
+      document.removeEventListener("mousemove", handleMove);
+      document.removeEventListener("mouseup", handleEnd);
+      document.removeEventListener("touchmove", handleMove);
+      document.removeEventListener("touchend", handleEnd);
+    };
+  }, [
+    isDragging,
+    dragOffset,
+    lo,
+    hi,
+    getPositionFromEvent,
+    positionToValue,
+    min,
+    max,
+    step,
+    onChange,
+    onDragEnd,
+  ]);
+
+  const minPosition = valueToPosition(lo);
+  const maxPosition = valueToPosition(hi);
 
   return (
     <div className="relative">
@@ -67,46 +497,109 @@ function DepthRangeSlider({
           {tooltip.text}
         </div>
       )}
-      
-      {/* Range track */}
-      <div className="relative h-2 bg-white/20 rounded-full">
-        {/* Active range */}
-        <div 
-          className="absolute h-full bg-white/40 rounded-full"
-          style={{
-            left: `${((lo - min) / (max - min)) * 100}%`,
-            width: `${((hi - lo) / (max - min)) * 100}%`
-          }}
-        />
+
+      <div
+        className="h-[200px] relative shrink-0 w-[24px]"
+        data-name="Slider"
+      >
+        {/* Background track */}
+        <div className="absolute flex h-[200px] items-center justify-center left-0 right-0 top-0">
+          <div className="flex-none h-[24px] rotate-[90deg] w-[200px]">
+            <div
+              className="bg-gradient-to-l from-[#545454] rounded-[6px] size-full to-[#767676]"
+              data-name="Slider-background"
+            />
+          </div>
+        </div>
+
+        {/* Track progress container */}
+        <div
+          ref={sliderRef}
+          className="absolute box-border content-stretch flex flex-col h-[200px] items-center justify-between left-px rounded-[4.5px] top-0 w-[22px] cursor-pointer"
+          data-name="track progress"
+        >
+          {/* Range highlight */}
+          <div
+            className="absolute bg-gradient-to-r from-[rgba(255,255,255,0.83)] to-[rgba(229,229,229,0.83)] rounded-[4.5px] w-full transition-all duration-150"
+            style={{
+              bottom: `${minPosition * 100}%`,
+              height: `${(maxPosition - minPosition) * 100}%`,
+            }}
+            onMouseDown={handleRangeStart}
+            onTouchStart={handleRangeStart}
+          />
+
+          {/* Min handle (bottom) */}
+          <div
+            className={`absolute bg-white h-[9px] rounded-[4px] w-full cursor-grab transition-all duration-150 ${
+              isDragging === "min"
+                ? "cursor-grabbing scale-110"
+                : ""
+            } ${hoveredHandle === "min" ? "shadow-lg" : ""}`}
+            style={{
+              bottom: `calc(${minPosition * 100}% - 4.5px)`,
+              transform:
+                isDragging === "min" ? "scale(1.1)" : "scale(1)",
+            }}
+            onMouseDown={(e) => handleStart(e, "min")}
+            onTouchStart={(e) => handleStart(e, "min")}
+            onMouseEnter={() => setHoveredHandle("min")}
+            onMouseLeave={() => setHoveredHandle(null)}
+            data-name="Lower handle thumb"
+          >
+            <div
+              aria-hidden="true"
+              className={`absolute border-[#707070] border-[0.7px] border-solid inset-0 pointer-events-none rounded-[4px] transition-shadow duration-150 ${
+                isDragging === "min" || hoveredHandle === "min"
+                  ? "shadow-[0px_6px_8px_-1px_rgba(10,13,18,0.15),0px_4px_6px_-2px_rgba(10,13,18,0.1)]"
+                  : "shadow-[0px_4px_6px_-1px_rgba(10,13,18,0.1),0px_2px_4px_-2px_rgba(10,13,18,0.06)]"
+              }`}
+            />
+
+            {/* Tooltip for min handle */}
+            {showTooltip === "min" && (
+              <div className="absolute left-full ml-2 top-1/2 -translate-y-1/2 bg-black text-white px-2 py-1 rounded text-xs whitespace-nowrap z-10">
+                {lo} m
+              </div>
+            )}
+          </div>
+
+          {/* Max handle (top) */}
+          <div
+            className={`absolute bg-white h-[9px] rounded-[4px] w-full cursor-grab transition-all duration-150 ${
+              isDragging === "max"
+                ? "cursor-grabbing scale-110"
+                : ""
+            } ${hoveredHandle === "max" ? "shadow-lg" : ""}`}
+            style={{
+              bottom: `calc(${maxPosition * 100}% - 4.5px)`,
+              transform:
+                isDragging === "max" ? "scale(1.1)" : "scale(1)",
+            }}
+            onMouseDown={(e) => handleStart(e, "max")}
+            onTouchStart={(e) => handleStart(e, "max")}
+            onMouseEnter={() => setHoveredHandle("max")}
+            onMouseLeave={() => setHoveredHandle(null)}
+            data-name="Upper handle thumb"
+          >
+            <div
+              aria-hidden="true"
+              className={`absolute border-[#707070] border-[0.7px] border-solid inset-0 pointer-events-none rounded-[4px] transition-shadow duration-150 ${
+                isDragging === "max" || hoveredHandle === "max"
+                  ? "shadow-[0px_6px_8px_-1px_rgba(10,13,18,0.15),0px_4px_6px_-2px_rgba(10,13,18,0.1)]"
+                  : "shadow-[0px_4px_6px_-1px_rgba(10,13,18,0.1),0px_2px_4px_-2px_rgba(10,13,18,0.06)]"
+              }`}
+            />
+
+            {/* Tooltip for max handle */}
+            {showTooltip === "max" && (
+              <div className="absolute left-full ml-2 top-1/2 -translate-y-1/2 bg-black text-white px-2 py-1 rounded text-xs whitespace-nowrap z-10">
+                {hi} m
+              </div>
+            )}
+          </div>
+        </div>
       </div>
-      
-      {/* Slider inputs */}
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={lo}
-        onChange={(e) => handleChange(Number(e.target.value), hi)}
-        onMouseDown={onDragStart}
-        onMouseUp={onDragEnd}
-        onTouchStart={onDragStart}
-        onTouchEnd={onDragEnd}
-        className="absolute top-0 w-full h-2 [appearance:none] bg-transparent outline-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:shadow-lg [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-white/20 z-10"
-      />
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={hi}
-        onChange={(e) => handleChange(lo, Number(e.target.value))}
-        onMouseDown={onDragStart}
-        onMouseUp={onDragEnd}
-        onTouchStart={onDragStart}
-        onTouchEnd={onDragEnd}
-        className="absolute top-0 w-full h-2 [appearance:none] bg-transparent outline-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:shadow-lg [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-white/20 z-20"
-      />
     </div>
   );
 }
@@ -167,7 +660,15 @@ const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
 function miningHeatColor(grade: number) {
   const t = clamp01((grade - MIN_GRADE) / (MAX_GRADE - MIN_GRADE));
-  const stops = [ [0,0,87,174],[0.25,0,200,83],[0.5,255,235,59],[0.75,255,152,0],[1,244,67,54] ];
+  // Inverted color stops: high grades (40 g/T) = light blue, low grades (0 g/T) = dark red/black
+  const stops = [ 
+    [0, 15, 2, 1],          // #0F0201 at 0% (0 g/T = dark red/black)
+    [0.25, 222, 34, 22],    // #DE2216 at 25%
+    [0.4, 234, 206, 85],    // #EACE55 at 40%
+    [0.49, 235, 220, 90],   // #EBDC5A at 49%
+    [0.7, 254, 254, 255],   // #FEFEFF at 70%
+    [1, 154, 194, 251]      // #9AC2FB at 100% (40 g/T = light blue)
+  ];
   for (let i = 1; i < stops.length; i++) {
     const [t1, r1, g1, b1] = stops[i - 1] as number[];
     const [t2, r2, g2, b2] = stops[i] as number[];
@@ -232,7 +733,8 @@ export default function App(){
   const [depthRange, setDepthRange] = useState({ min: -1600, max: 0 });
   const [depthTooltip, setDepthTooltip] = useState<{ x: number; y: number; text: string } | null>(null);
   const [isDraggingDepth, setIsDraggingDepth] = useState(false);
-  const [thicknessPreset, setThicknessPreset] = useState<'thin' | 'medium' | 'thick' | 'custom'>('medium');
+  const [gradeTooltip, setGradeTooltip] = useState<{ x: number; y: number; text: string } | null>(null);
+  const [isDraggingGrade, setIsDraggingGrade] = useState(false);
 
   const [hoverTooltip, setHoverTooltip] = useState<{ x: number; y: number; text: string } | null>(null);
   const [selected, setSelected] = useState<{ grade: string; depth: string; conf: string } | null>(null);
@@ -399,18 +901,22 @@ export default function App(){
       switch (e.key) {
         case 'ArrowUp':
           e.preventDefault();
+          // For vertical slider: up moves both bounds up (towards surface)
           setDepthWindow([currentLo + step, currentHi + step]);
           break;
         case 'ArrowDown':
           e.preventDefault();
+          // For vertical slider: down moves both bounds down (deeper)
           setDepthWindow([currentLo - step, currentHi - step]);
           break;
         case 'ArrowLeft':
           e.preventDefault();
+          // For vertical slider: left adjusts lower bound (min depth)
           setDepthWindow([currentLo - step, currentHi]);
           break;
         case 'ArrowRight':
           e.preventDefault();
+          // For vertical slider: right adjusts upper bound (max depth)
           setDepthWindow([currentLo, currentHi + step]);
           break;
       }
@@ -420,20 +926,6 @@ export default function App(){
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [depthWindow]);
 
-  // Thickness presets
-  const thicknessPresets = {
-    thin: 10,
-    medium: 30,
-    thick: 60
-  };
-
-  const applyThicknessPreset = (preset: 'thin' | 'medium' | 'thick') => {
-    const thickness = thicknessPresets[preset];
-    const center = (depthWindow[0] + depthWindow[1]) / 2;
-    const halfThickness = thickness / 2;
-    setDepthWindow([center - halfThickness, center + halfThickness]);
-    setThicknessPreset(preset);
-  };
 
   // Hover + click
   useEffect(()=>{ if(!domReady) return; const mount=mountRef.current; const scene=sceneRef.current; if(!mount||!scene) return; const raycaster=new THREE.Raycaster(); (raycaster as any).params.Points={threshold:8}; function onMove(e:MouseEvent){ const rect=mount.getBoundingClientRect(); const x=((e.clientX-rect.left)/rect.width)*2-1; const y=-((e.clientY-rect.top)/rect.height)*2+1; raycaster.setFromCamera({x,y} as any, cameraRef.current!); const hits=raycaster.intersectObjects([vividRef.current!].filter(Boolean),true); if(hits&&hits.length){ const i=(hits[0] as any).index??0; const gAttr=(vividRef.current as any).geometry.getAttribute("grade"); const grade=gAttr?gAttr.getX(i):undefined; const txt=grade!==undefined?`${grade.toFixed(2)} g/T`:"grade"; setHoverTooltip({x:e.clientX,y:e.clientY,text:txt}); } else setHoverTooltip(null);} function onClick(e:MouseEvent){ const rect=mount.getBoundingClientRect(); const x=((e.clientX-rect.left)/rect.width)*2-1; const y=-((e.clientY-rect.top)/rect.height)*2+1; const rc=new THREE.Raycaster(); (rc as any).params.Points={threshold:8}; rc.setFromCamera({x,y} as any, cameraRef.current!); const hits=rc.intersectObjects([vividRef.current!].filter(Boolean),true); if(hits&&hits.length){ const i=(hits[0] as any).index??0; const pos=(vividRef.current as any).geometry.getAttribute("position"); const gAttr=(vividRef.current as any).geometry.getAttribute("grade"); const cAttr=(vividRef.current as any).geometry.getAttribute("conf"); const depth=Math.round(pos.getZ(i)); const grade=gAttr?gAttr.getX(i):undefined; const confIdx=cAttr?Math.round(cAttr.getX(i)):1; const confLabel=confIdx===0?"Measured":confIdx===1?"Indicated":"Inferred"; setSelected({grade: grade!==undefined?`${grade.toFixed(2)} g/T`:"—", depth:`${depth} m`, conf:confLabel}); setDrawerOpen(true); if(highlightRef.current && scene){ scene.remove(highlightRef.current); (highlightRef.current as any).geometry.dispose(); (highlightRef.current as any).material.dispose(); highlightRef.current=null; } const p=new THREE.Vector3(pos.getX(i),pos.getY(i),pos.getZ(i)); const sph=new THREE.Mesh(new THREE.SphereGeometry(6,16,16), new THREE.MeshBasicMaterial({color:0xffffff})); sph.position.copy(p); if(scene) scene.add(sph); highlightRef.current=sph; } }
@@ -462,6 +954,20 @@ export default function App(){
     }
   };
 
+  // Grade slider tooltip
+  const handleGradeSliderChange = (newValue: [number, number]) => {
+    setGradeRange(newValue);
+    if (isDraggingGrade) {
+      const [lo, hi] = newValue;
+      const range = hi - lo;
+      setGradeTooltip({
+        x: 0, // Will be set by mouse position
+        y: 0,
+        text: `Grade: ${Math.round(lo)}–${Math.round(hi)} g/T (${Math.round(range)} g/T range)`
+      });
+    }
+  };
+
   // Legend
   function Legend(){ useEffect(()=>{ const canvas=document.getElementById("legendCanvas") as HTMLCanvasElement|null; if(!canvas) return; const ctx=canvas.getContext("2d")!; for(let i=0;i<canvas.height;i++){ const t=1 - i/(canvas.height-1); const c=miningHeatColor(t*MAX_GRADE); ctx.fillStyle=`rgb(${Math.round(c.r*255)},${Math.round(c.g*255)},${Math.round(c.b*255)})`; ctx.fillRect(0,i,canvas.width,1);} ctx.fillStyle="#fff"; ctx.globalAlpha=0.8; ctx.font="10px Inter"; ctx.fillText("40",18,10); ctx.fillText("20",18,canvas.height/2+3); ctx.fillText("0",18,canvas.height-2); ctx.globalAlpha=1; },[]); return (<div className="pointer-events-none select-none text-xs text-white/80"><div className="mb-1">g/T</div><div className="flex items-center gap-2"><canvas id="legendCanvas" width={16} height={120} className="rounded"/></div><div className="mt-1">Low → High</div></div>); }
 
@@ -473,8 +979,9 @@ export default function App(){
       <div className="relative w-full h-[78vh] lg:h-[82vh]">
         <div ref={(el)=>{mountRef.current=el; if(el) setDomReady(true);}} className="absolute inset-0 rounded-2xl overflow-hidden bg-neutral-900/40"/>
 
-        {/* Left controls: Depth Range & Thickness */}
-        <div className="absolute left-4 top-1/2 -translate-y-1/2 flex flex-col items-center gap-4">
+        {/* Left controls: Depth and Grade Sliders */}
+        <div className="absolute left-4 top-1/2 -translate-y-1/2 flex items-center gap-6">
+          {/* Depth Window Slider */}
           <Card className="p-4 bg-black/50 backdrop-blur">
             <div className="text-center mb-3">
               <div className="text-sm text-white/90 font-medium">Depth Window</div>
@@ -486,9 +993,15 @@ export default function App(){
               </div>
             </div>
             
-            {/* Depth Range Slider */}
-            <div className="w-64 mb-4">
-              <DepthRangeSlider
+            {/* Vertical Depth Range Slider */}
+            <div className="flex flex-col items-center gap-2 mb-4">
+              {/* Top label - shows current max value */}
+              <div className="font-['Inter:Light',_sans-serif] font-light leading-[0] not-italic opacity-[0.56] relative shrink-0 text-[10px] text-center text-nowrap text-white tracking-[-0.5px]">
+                <p className="leading-[normal] whitespace-pre">{Math.round(depthWindow[1])} m</p>
+              </div>
+              
+              {/* Vertical Slider */}
+              <VerticalDepthRangeSlider
                 value={depthWindow}
                 min={depthRange.min}
                 max={depthRange.max}
@@ -501,60 +1014,56 @@ export default function App(){
                 }}
                 tooltip={isDraggingDepth ? depthTooltip : null}
               />
-              <div className="flex justify-between text-[10px] text-white/50 mt-1">
-                <span>{Math.round(depthRange.min)} m</span>
-                <span>{Math.round(depthRange.max)} m</span>
+              
+              {/* Bottom label - shows current min value */}
+              <div className="font-['Inter:Light',_sans-serif] font-light leading-[0] not-italic opacity-[0.56] relative shrink-0 text-[10px] text-center text-nowrap text-white tracking-[-0.5px]">
+                <p className="leading-[normal] whitespace-pre">{Math.round(depthWindow[0])} m</p>
               </div>
             </div>
+          </Card>
 
-            {/* Thickness Presets */}
-            <div className="space-y-2">
-              <div className="text-xs text-white/70 text-center">Thickness Presets</div>
-              <div className="flex gap-1">
-                <Button
-                  size="sm"
-                  variant={thicknessPreset === 'thin' ? 'outline' : 'ghost'}
-                  onClick={() => applyThicknessPreset('thin')}
-                  className="text-[10px] px-2 py-1"
-                >
-                  Thin (10m)
-                </Button>
-                <Button
-                  size="sm"
-                  variant={thicknessPreset === 'medium' ? 'outline' : 'ghost'}
-                  onClick={() => applyThicknessPreset('medium')}
-                  className="text-[10px] px-2 py-1"
-                >
-                  Med (30m)
-                </Button>
-                <Button
-                  size="sm"
-                  variant={thicknessPreset === 'thick' ? 'outline' : 'ghost'}
-                  onClick={() => applyThicknessPreset('thick')}
-                  className="text-[10px] px-2 py-1"
-                >
-                  Thick (60m)
-                </Button>
+          {/* Grade Range Slider */}
+          <Card className="p-4 bg-black/50 backdrop-blur">
+            <div className="text-center mb-3">
+              <div className="text-sm text-white/90 font-medium">Grade Range</div>
+              <div className="text-xs text-white/60">
+                {Math.round(gradeRange[0])}–{Math.round(gradeRange[1])} g/T
               </div>
-            </div>
+              <div className="text-[10px] text-white/50">
+                Range: {Math.round(gradeRange[1] - gradeRange[0])} g/T
+              </div>
+        </div>
 
-            {/* Keyboard Help */}
-            <div className="mt-3 text-[10px] text-white/40 text-center">
-              Use ↑/↓ to move window, ←/→ to adjust bounds
-              <br />
-              Shift + arrows for 10m steps
+            {/* Vertical Grade Range Slider */}
+            <div className="flex flex-col items-center gap-2 mb-4">
+              {/* Top label - shows current max value */}
+              <div className="font-['Inter:Light',_sans-serif] font-light leading-[0] not-italic opacity-[0.56] relative shrink-0 text-[10px] text-center text-nowrap text-white tracking-[-0.5px]">
+                <p className="leading-[normal] whitespace-pre">{Math.round(gradeRange[1])} g/T</p>
+          </div>
+              
+              {/* Vertical Slider */}
+              <VerticalGradeRangeSlider
+                value={gradeRange}
+                min={0}
+                max={40}
+                step={1}
+                onChange={handleGradeSliderChange}
+                onDragStart={() => setIsDraggingGrade(true)}
+                onDragEnd={() => {
+                  setIsDraggingGrade(false);
+                  setGradeTooltip(null);
+                }}
+                tooltip={isDraggingGrade ? gradeTooltip : null}
+              />
+              
+              {/* Bottom label - shows current min value */}
+              <div className="font-['Inter:Light',_sans-serif] font-light leading-[0] not-italic opacity-[0.56] relative shrink-0 text-[10px] text-center text-nowrap text-white tracking-[-0.5px]">
+                <p className="leading-[normal] whitespace-pre">{Math.round(gradeRange[0])} g/T</p>
+              </div>
             </div>
           </Card>
         </div>
 
-        {/* Grade slider bottom */}
-        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/50 backdrop-blur px-4 py-2 rounded-full shadow border border-white/10">
-          <div className="flex items-center gap-3">
-            <span className="text-xs text-white/80">Grade (g/T)</span>
-            <TwoHandleSlider value={gradeRange} min={0} max={40} step={1} onChange={setGradeRange}/>
-            <span className="text-xs">{gradeRange[0]}–{gradeRange[1]}</span>
-          </div>
-        </div>
 
         {/* Top-right controls */}
         <div className="absolute top-4 right-4 flex items-center gap-2 bg-black/50 backdrop-blur px-2 py-1 rounded-full border border-white/10">
@@ -566,8 +1075,6 @@ export default function App(){
           </label>
         </div>
 
-        {/* Legend */}
-        <div className="absolute top-4 right-52 bg-black/50 backdrop-blur px-3 py-2 rounded-xl border border-white/10"><Legend/></div>
         
         {/* Camera Debug Panel */}
         {showCameraDebug && (
