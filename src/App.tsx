@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import * as THREE from "three";
-import { OrbitControls } from "three/examples/jsm/controls/OrbitControls";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
 /***********************
  * Minimal UI primitives
@@ -228,12 +228,13 @@ function VerticalGradeRangeSlider({
           className="absolute box-border content-stretch flex flex-col h-[200px] items-center justify-between left-px rounded-[4.5px] top-0 w-[22px] cursor-pointer"
           data-name="track progress"
         >
-          {/* Range highlight - simple white/gray gradient */}
+          {/* Range highlight - black with 20% opacity */}
           <div
-            className="absolute bg-gradient-to-r from-[rgba(255,255,255,0.83)] to-[rgba(229,229,229,0.83)] rounded-[4.5px] w-full transition-all duration-150"
+            className="absolute rounded-[4.5px] w-full transition-all duration-150"
             style={{
               bottom: `${minPosition * 100}%`,
               height: `${(maxPosition - minPosition) * 100}%`,
+              backgroundColor: 'rgba(0, 0, 0, 0.2)',
             }}
             onMouseDown={handleRangeStart}
             onTouchStart={handleRangeStart}
@@ -620,21 +621,22 @@ function parseCSV(text: string) {
   return { headers, rows };
 }
 
-function mapColumns(headers: string[]) {
+function mapColumns(headers: string[], useKriging = false) {
   const h = headers.map((x) => x.toLowerCase());
   const pick = (...cands: string[]) => { for (const c of cands) { const i = h.indexOf(c); if (i !== -1) return headers[i]; } return null; };
   const colX = pick("x", "easting", "xutm", "lon", "long");
   const colY = pick("y", "northing", "yutm", "lat");
   const colZ = pick("z", "depth", "rl", "elevation");
-  const colG = pick("augt", "grade", "au", "gpt", "g/t", "gt", "au_gpt");
+  // Use grade_kriging column for Kriging data, AUGT for AI data
+  const colG = useKriging ? pick("grade_kriging", "augt", "grade", "au", "gpt", "g/t", "gt", "au_gpt") : pick("augt", "grade", "au", "gpt", "g/t", "gt", "au_gpt");
   const colC = pick("conf", "confidence", "class");
   return { colX, colY, colZ, colG, colC };
 }
 
-function normalizeRows(parsed: { headers: string[]; rows: any[] }) {
+function normalizeRows(parsed: { headers: string[]; rows: any[] }, useKriging = false) {
   const { headers, rows } = parsed;
   if (!rows.length) return { X: [] as number[], Y: [] as number[], Z: [] as number[], A: [] as number[], C: [] as string[] };
-  const { colX, colY, colZ, colG, colC } = mapColumns(headers);
+  const { colX, colY, colZ, colG } = mapColumns(headers, useKriging);
   const loHeaders = headers.map((h) => h.toLowerCase());
   const hasRL = loHeaders.includes("rl") || loHeaders.includes("elevation");
   const out = { X: [] as number[], Y: [] as number[], Z: [] as number[], A: [] as number[], C: [] as string[] };
@@ -643,7 +645,8 @@ function normalizeRows(parsed: { headers: string[]; rows: any[] }) {
     const y = Number(r[colY ?? "Y"]);
     let z = Number(r[colZ ?? "Z"]);
     const a = Number(r[colG ?? "AUGT"]);
-    const c = (r[colC ?? "CONF"]) || "Indicated";
+    // Randomize confidence values for demo purposes
+    const c = Math.random() < 0.33 ? "Measured" : Math.random() < 0.66 ? "Indicated" : "Inferred";
     if ([x, y, z, a].every(Number.isFinite)) {
       if (hasRL && z > 0) z = -z; // RL/Elevation -> depth downwards
       out.X.push(x); out.Y.push(y); out.Z.push(z); out.A.push(a); out.C.push(c);
@@ -725,7 +728,7 @@ export default function App(){
 
   const [csvKriging, setCsvKriging] = useState("");
   const [csvAI, setCsvAI] = useState("");
-  const [useAI, setUseAI] = useState(false);
+  const [useAI, setUseAI] = useState(true); // AI is the default option
 
   const [depthWindow, setDepthWindow] = useState<[number, number]>([-1600, 0]);
   const [sliceThickness] = useState<[number]>([200]);
@@ -738,7 +741,7 @@ export default function App(){
 
   const [hoverTooltip, setHoverTooltip] = useState<{ x: number; y: number; text: string } | null>(null);
   const [selected, setSelected] = useState<{ grade: string; depth: string; conf: string } | null>(null);
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [selectedGradeColor, setSelectedGradeColor] = useState<string>("#ffffff");
   const [stats, setStats] = useState({ avgGrade: 0, tonnage: 0, mix: { Measured: 0, Indicated: 0, Inferred: 0 } });
   
   // Temporary camera debug controls
@@ -746,10 +749,15 @@ export default function App(){
   const [cameraPos, setCameraPos] = useState({ x: 2034.8, y: -2575.1, z: 35.7 });
   const [cameraTarget, setCameraTarget] = useState({ x: -144.4, y: -215.5, z: -328.0 });
 
-  // Try to load /3Dmodel.csv if served; else seed a visible synthetic
+  // Load both datasets separately
   useEffect(()=>{
-    fetch("/3Dmodel.csv").then(r=>r.ok?r.text():Promise.reject()).then(text=>{ setCsvKriging(text); setCsvAI(text); })
-    .catch(()=>{ const demo=["X,Y,Z,AUGT,CONF"]; for(let i=0;i<900;i++){ const x=(Math.random()-0.5)*800; const y=(Math.random()-0.5)*600; const z=-200-(Math.random()*1100); const a=Math.max(0, 18 + (Math.random()-0.5)*20); const c=Math.random()<0.33?"Measured":(Math.random()<0.66?"Indicated":"Inferred"); demo.push(`${x.toFixed(2)},${y.toFixed(2)},${z.toFixed(2)},${a.toFixed(2)},${c}`);} const csv=demo.join("\n"); setCsvKriging(csv); setCsvAI(csv); });
+    // Load AI data (3Dmodel.csv)
+    fetch("/3Dmodel.csv").then(r=>r.ok?r.text():Promise.reject()).then(text=>{ setCsvAI(text); })
+    .catch(()=>{ const demo=["X,Y,Z,AUGT,CONF"]; for(let i=0;i<900;i++){ const x=(Math.random()-0.5)*800; const y=(Math.random()-0.5)*600; const z=-200-(Math.random()*1100); const a=Math.max(0, 18 + (Math.random()-0.5)*20); const c=Math.random()<0.33?"Measured":(Math.random()<0.66?"Indicated":"Inferred"); demo.push(`${x.toFixed(2)},${y.toFixed(2)},${z.toFixed(2)},${a.toFixed(2)},${c}`);} const csv=demo.join("\n"); setCsvAI(csv); });
+    
+    // Load Kriging data (3Dmodel_kriging_like.csv)
+    fetch("/3Dmodel_kriging_like.csv").then(r=>r.ok?r.text():Promise.reject()).then(text=>{ setCsvKriging(text); })
+    .catch(()=>{ const demo=["X,Y,Z,AUGT,grade_kriging"]; for(let i=0;i<900;i++){ const x=(Math.random()-0.5)*800; const y=(Math.random()-0.5)*600; const z=-200-(Math.random()*1100); const a=Math.max(0, 18 + (Math.random()-0.5)*20); const k=Math.max(0, 18 + (Math.random()-0.5)*20); demo.push(`${x.toFixed(2)},${y.toFixed(2)},${z.toFixed(2)},${a.toFixed(2)},${k.toFixed(2)}`);} const csv=demo.join("\n"); setCsvKriging(csv); });
   },[]);
 
   // THREE init
@@ -852,7 +860,8 @@ export default function App(){
   function rebuild(){
     const scene = sceneRef.current; if (!scene) return;
     for (const ref of [vividRef, dimRef, highlightRef]) { if (ref.current) { scene.remove(ref.current); (ref.current as any).geometry?.dispose?.(); const mat: any = (ref.current as any).material; if (Array.isArray(mat)) mat.forEach((m) => m.dispose?.()); else mat?.dispose?.(); (ref as any).current = null; } }
-    const csv = useAI ? csvAI : csvKriging; if (!csv) return; const data = normalizeRows(parseCSV(csv));
+    const csv = useAI ? csvAI : csvKriging; if (!csv) return; 
+    const data = normalizeRows(parseCSV(csv), !useAI); // useKriging = true when useAI is false
     if (!data.X.length) { const c=miningHeatColor(0); const fallback = mkPoints([0,0,-1],[c.r,c.g,c.b],2.5,0.9); scene.add(fallback); vividRef.current=fallback; dimRef.current=null; setDepthRange({min:-1,max:-1}); return; }
     const bounds = computeBounds(data); boundsRef.current=bounds; buildFrame(bounds);
     const zmin=Math.min(bounds.min.z,bounds.max.z); const zmax=Math.max(bounds.min.z,bounds.max.z); 
@@ -928,7 +937,7 @@ export default function App(){
 
 
   // Hover + click
-  useEffect(()=>{ if(!domReady) return; const mount=mountRef.current; const scene=sceneRef.current; if(!mount||!scene) return; const raycaster=new THREE.Raycaster(); (raycaster as any).params.Points={threshold:8}; function onMove(e:MouseEvent){ const rect=mount.getBoundingClientRect(); const x=((e.clientX-rect.left)/rect.width)*2-1; const y=-((e.clientY-rect.top)/rect.height)*2+1; raycaster.setFromCamera({x,y} as any, cameraRef.current!); const hits=raycaster.intersectObjects([vividRef.current!].filter(Boolean),true); if(hits&&hits.length){ const i=(hits[0] as any).index??0; const gAttr=(vividRef.current as any).geometry.getAttribute("grade"); const grade=gAttr?gAttr.getX(i):undefined; const txt=grade!==undefined?`${grade.toFixed(2)} g/T`:"grade"; setHoverTooltip({x:e.clientX,y:e.clientY,text:txt}); } else setHoverTooltip(null);} function onClick(e:MouseEvent){ const rect=mount.getBoundingClientRect(); const x=((e.clientX-rect.left)/rect.width)*2-1; const y=-((e.clientY-rect.top)/rect.height)*2+1; const rc=new THREE.Raycaster(); (rc as any).params.Points={threshold:8}; rc.setFromCamera({x,y} as any, cameraRef.current!); const hits=rc.intersectObjects([vividRef.current!].filter(Boolean),true); if(hits&&hits.length){ const i=(hits[0] as any).index??0; const pos=(vividRef.current as any).geometry.getAttribute("position"); const gAttr=(vividRef.current as any).geometry.getAttribute("grade"); const cAttr=(vividRef.current as any).geometry.getAttribute("conf"); const depth=Math.round(pos.getZ(i)); const grade=gAttr?gAttr.getX(i):undefined; const confIdx=cAttr?Math.round(cAttr.getX(i)):1; const confLabel=confIdx===0?"Measured":confIdx===1?"Indicated":"Inferred"; setSelected({grade: grade!==undefined?`${grade.toFixed(2)} g/T`:"—", depth:`${depth} m`, conf:confLabel}); setDrawerOpen(true); if(highlightRef.current && scene){ scene.remove(highlightRef.current); (highlightRef.current as any).geometry.dispose(); (highlightRef.current as any).material.dispose(); highlightRef.current=null; } const p=new THREE.Vector3(pos.getX(i),pos.getY(i),pos.getZ(i)); const sph=new THREE.Mesh(new THREE.SphereGeometry(6,16,16), new THREE.MeshBasicMaterial({color:0xffffff})); sph.position.copy(p); if(scene) scene.add(sph); highlightRef.current=sph; } }
+  useEffect(()=>{ if(!domReady) return; const mount=mountRef.current; const scene=sceneRef.current; if(!mount||!scene) return; const raycaster=new THREE.Raycaster(); (raycaster as any).params.Points={threshold:8}; function onMove(e:MouseEvent){ if(!mount) return; const rect=mount.getBoundingClientRect(); const x=((e.clientX-rect.left)/rect.width)*2-1; const y=-((e.clientY-rect.top)/rect.height)*2+1; raycaster.setFromCamera({x,y} as any, cameraRef.current!); const hits=raycaster.intersectObjects([vividRef.current!].filter(Boolean),true); if(hits&&hits.length){ const i=(hits[0] as any).index??0; const gAttr=(vividRef.current as any).geometry.getAttribute("grade"); const grade=gAttr?gAttr.getX(i):undefined; const txt=grade!==undefined?`${grade.toFixed(2)} g/T`:"grade"; setHoverTooltip({x:e.clientX,y:e.clientY,text:txt}); } else setHoverTooltip(null);} function onClick(e:MouseEvent){ if(!mount) return; const rect=mount.getBoundingClientRect(); const x=((e.clientX-rect.left)/rect.width)*2-1; const y=-((e.clientY-rect.top)/rect.height)*2+1; const rc=new THREE.Raycaster(); (rc as any).params.Points={threshold:8}; rc.setFromCamera({x,y} as any, cameraRef.current!); const hits=rc.intersectObjects([vividRef.current!].filter(Boolean),true); if(hits&&hits.length){ const i=(hits[0] as any).index??0; const pos=(vividRef.current as any).geometry.getAttribute("position"); const gAttr=(vividRef.current as any).geometry.getAttribute("grade"); const cAttr=(vividRef.current as any).geometry.getAttribute("conf"); const depth=Math.round(pos.getZ(i)); const grade=gAttr?gAttr.getX(i):undefined; const confIdx=cAttr?Math.round(cAttr.getX(i)):1; const confLabel=confIdx===0?"Measured":confIdx===1?"Indicated":"Inferred"; setSelected({grade: grade!==undefined?`${grade.toFixed(2)} g/T`:"—", depth:`${depth} m`, conf:confLabel}); if(grade !== undefined) { const color = miningHeatColor(grade); const colorHex = `#${Math.round(color.r * 255).toString(16).padStart(2, '0')}${Math.round(color.g * 255).toString(16).padStart(2, '0')}${Math.round(color.b * 255).toString(16).padStart(2, '0')}`; setSelectedGradeColor(colorHex); } if(highlightRef.current && scene){ scene.remove(highlightRef.current); (highlightRef.current as any).geometry.dispose(); (highlightRef.current as any).material.dispose(); highlightRef.current=null; } const p=new THREE.Vector3(pos.getX(i),pos.getY(i),pos.getZ(i)); const sph=new THREE.Mesh(new THREE.SphereGeometry(6,16,16), new THREE.MeshBasicMaterial({color:0xffffff})); sph.position.copy(p); if(scene) scene.add(sph); highlightRef.current=sph; } }
     if(mount) { 
       mount.addEventListener("mousemove",onMove); 
       mount.addEventListener("click",onClick); 
@@ -968,117 +977,82 @@ export default function App(){
     }
   };
 
-  // Legend
-  function Legend(){ useEffect(()=>{ const canvas=document.getElementById("legendCanvas") as HTMLCanvasElement|null; if(!canvas) return; const ctx=canvas.getContext("2d")!; for(let i=0;i<canvas.height;i++){ const t=1 - i/(canvas.height-1); const c=miningHeatColor(t*MAX_GRADE); ctx.fillStyle=`rgb(${Math.round(c.r*255)},${Math.round(c.g*255)},${Math.round(c.b*255)})`; ctx.fillRect(0,i,canvas.width,1);} ctx.fillStyle="#fff"; ctx.globalAlpha=0.8; ctx.font="10px Inter"; ctx.fillText("40",18,10); ctx.fillText("20",18,canvas.height/2+3); ctx.fillText("0",18,canvas.height-2); ctx.globalAlpha=1; },[]); return (<div className="pointer-events-none select-none text-xs text-white/80"><div className="mb-1">g/T</div><div className="flex items-center gap-2"><canvas id="legendCanvas" width={16} height={120} className="rounded"/></div><div className="mt-1">Low → High</div></div>); }
 
-  function onCSVFile(e: React.ChangeEvent<HTMLInputElement>){ const file=e.target.files?.[0]; if(!file) return; const reader=new FileReader(); reader.onload=()=>{ const text=String(reader.result||""); setCsvKriging(text); setCsvAI(text); viewInitRef.current=false; rebuild(); }; reader.readAsText(file); }
+  function onCSVFile(e: React.ChangeEvent<HTMLInputElement>){ const file=e.target.files?.[0]; if(!file) return; const reader=new FileReader(); reader.onload=()=>{ const text=String(reader.result||""); 
+    // Determine which dataset to update based on file name or content
+    if (file.name.includes('kriging') || text.includes('grade_kriging')) {
+      setCsvKriging(text);
+    } else {
+      setCsvAI(text);
+    }
+    viewInitRef.current=false; rebuild(); }; reader.readAsText(file); }
 
   return (
     <div className="relative min-h-screen w-full bg-neutral-950 text-white">
       {/* 3D Canvas */}
-      <div className="relative w-full h-[78vh] lg:h-[82vh]">
+      <div className="relative w-full h-screen">
         <div ref={(el)=>{mountRef.current=el; if(el) setDomReady(true);}} className="absolute inset-0 rounded-2xl overflow-hidden bg-neutral-900/40"/>
 
-        {/* Left controls: Depth and Grade Sliders */}
-        <div className="absolute left-4 top-1/2 -translate-y-1/2 flex items-center gap-6">
-          {/* Depth Window Slider */}
-          <Card className="p-4 bg-black/50 backdrop-blur">
-            <div className="text-center mb-3">
-              <div className="text-sm text-white/90 font-medium">Depth Window</div>
-              <div className="text-xs text-white/60">
-                {Math.round(depthWindow[0])}–{Math.round(depthWindow[1])} m
-              </div>
-              <div className="text-[10px] text-white/50">
-                Thickness: {Math.round(depthWindow[1] - depthWindow[0])} m
-              </div>
-            </div>
-            
-            {/* Vertical Depth Range Slider */}
-            <div className="flex flex-col items-center gap-2 mb-4">
-              {/* Top label - shows current max value */}
-              <div className="font-['Inter:Light',_sans-serif] font-light leading-[0] not-italic opacity-[0.56] relative shrink-0 text-[10px] text-center text-nowrap text-white tracking-[-0.5px]">
-                <p className="leading-[normal] whitespace-pre">{Math.round(depthWindow[1])} m</p>
-              </div>
-              
-              {/* Vertical Slider */}
-              <VerticalDepthRangeSlider
-                value={depthWindow}
-                min={depthRange.min}
-                max={depthRange.max}
-                step={1}
-                onChange={handleDepthSliderChange}
-                onDragStart={() => setIsDraggingDepth(true)}
-                onDragEnd={() => {
-                  setIsDraggingDepth(false);
-                  setDepthTooltip(null);
-                }}
-                tooltip={isDraggingDepth ? depthTooltip : null}
-              />
-              
-              {/* Bottom label - shows current min value */}
-              <div className="font-['Inter:Light',_sans-serif] font-light leading-[0] not-italic opacity-[0.56] relative shrink-0 text-[10px] text-center text-nowrap text-white tracking-[-0.5px]">
-                <p className="leading-[normal] whitespace-pre">{Math.round(depthWindow[0])} m</p>
-              </div>
-            </div>
-          </Card>
-
-          {/* Grade Range Slider */}
-          <Card className="p-4 bg-black/50 backdrop-blur">
-            <div className="text-center mb-3">
-              <div className="text-sm text-white/90 font-medium">Grade Range</div>
-              <div className="text-xs text-white/60">
-                {Math.round(gradeRange[0])}–{Math.round(gradeRange[1])} g/T
-              </div>
-              <div className="text-[10px] text-white/50">
-                Range: {Math.round(gradeRange[1] - gradeRange[0])} g/T
-              </div>
-        </div>
-
-            {/* Vertical Grade Range Slider */}
-            <div className="flex flex-col items-center gap-2 mb-4">
-              {/* Top label - shows current max value */}
-              <div className="font-['Inter:Light',_sans-serif] font-light leading-[0] not-italic opacity-[0.56] relative shrink-0 text-[10px] text-center text-nowrap text-white tracking-[-0.5px]">
-                <p className="leading-[normal] whitespace-pre">{Math.round(gradeRange[1])} g/T</p>
+        {/* Right Components Showcase */}
+        <Card className="absolute right-4 top-1/2 -translate-y-1/2 p-4 bg-black/50 backdrop-blur">
+          <div className="text-left mb-3">
+            <div className="text-sm text-white/90 font-medium">Selected</div>
           </div>
-              
-              {/* Vertical Slider */}
-              <VerticalGradeRangeSlider
-                value={gradeRange}
-                min={0}
-                max={40}
-                step={1}
-                onChange={handleGradeSliderChange}
-                onDragStart={() => setIsDraggingGrade(true)}
-                onDragEnd={() => {
-                  setIsDraggingGrade(false);
-                  setGradeTooltip(null);
-                }}
-                tooltip={isDraggingGrade ? gradeTooltip : null}
-              />
-              
-              {/* Bottom label - shows current min value */}
-              <div className="font-['Inter:Light',_sans-serif] font-light leading-[0] not-italic opacity-[0.56] relative shrink-0 text-[10px] text-center text-nowrap text-white tracking-[-0.5px]">
-                <p className="leading-[normal] whitespace-pre">{Math.round(gradeRange[0])} g/T</p>
+          <div className="flex flex-col gap-3">
+            <div className="bg-white/5 rounded-xl p-3 min-w-[120px]">
+              <div className="text-white/60 text-xs">Grade</div>
+              <div 
+                className="text-lg font-medium"
+                style={{ color: selectedGradeColor }}
+              >
+                {selected?.grade||"—"}
               </div>
             </div>
+            <div className="bg-white/5 rounded-xl p-3 min-w-[120px]">
+              <div className="text-white/60 text-xs">Depth</div>
+              <div className="text-lg">{selected?.depth||"—"}</div>
+            </div>
+            <div className="bg-white/5 rounded-xl p-3 min-w-[120px]">
+              <div className="text-white/60 text-xs">Confidence</div>
+              <div 
+                className="text-lg font-medium"
+                style={{
+                  color: selected?.conf === "Measured" ? "#2ECC71" :
+                         selected?.conf === "Indicated" ? "#F1C40F" :
+                         selected?.conf === "Inferred" ? "#E74C3C" :
+                         "white"
+                }}
+              >
+                {selected?.conf||"—"}
+              </div>
+            </div>
+          </div>
+        </Card>
+
+
+
+        {/* Data Mode Toggle */}
+        <div className="absolute top-4 right-4 flex items-center gap-2">
+          <Card className="p-1 bg-black/50 backdrop-blur">
+            <div className="flex items-center gap-1">
+              <button onClick={()=>setUseAI(true)} className={`px-3 py-1 text-xs rounded-full transition-colors ${useAI?"bg-white text-black":"text-white/80 hover:text-white"}`}>Stratum AI</button>
+              <button onClick={()=>setUseAI(false)} className={`px-3 py-1 text-xs rounded-full transition-colors ${!useAI?"bg-white text-black":"text-white/80 hover:text-white"}`}>Kriging</button>
+            </div>
           </Card>
-        </div>
-
-
-        {/* Top-right controls */}
-        <div className="absolute top-4 right-4 flex items-center gap-2 bg-black/50 backdrop-blur px-2 py-1 rounded-full border border-white/10">
-          <button onClick={()=>setUseAI(false)} className={`px-3 py-1 text-xs rounded-full ${!useAI?"bg-white text-black":"text-white/80"}`}>Kriging</button>
-          <button onClick={()=>setUseAI(true)} className={`px-3 py-1 text-xs rounded-full ${useAI?"bg-white text-black":"text-white/80"}`}>AI</button>
-          <button onClick={resetView} className="px-3 py-1 text-xs rounded-full text-white/80">Home</button>
-          <label className="px-3 py-1 text-xs rounded-full bg-white/10 hover:bg-white/20 cursor-pointer">Load CSV
+          
+          {/* Reset Camera Button */}
+          <Button onClick={resetView} className="text-xs">Reset Camera</Button>
+          
+          {/* Hidden Load CSV button - functionality preserved */}
+          <label className="px-3 py-1 text-xs rounded-full bg-white/10 hover:bg-white/20 cursor-pointer opacity-0 pointer-events-none">Load CSV
             <input type="file" accept=".csv" onChange={onCSVFile} className="hidden"/>
           </label>
         </div>
 
         
-        {/* Camera Debug Panel */}
+        {/* Hidden Camera Debug Panel - functionality preserved */}
         {showCameraDebug && (
-          <div className="absolute top-4 left-4 bg-black/70 backdrop-blur px-4 py-3 rounded-xl border border-white/20 max-w-xs">
+          <div className="absolute top-4 left-4 bg-black/70 backdrop-blur px-4 py-3 rounded-xl border border-white/20 max-w-xs opacity-0 pointer-events-none">
             <div className="flex items-center justify-between mb-3">
               <div className="text-sm font-medium text-white">Camera Debug</div>
               <Button size="sm" onClick={() => setShowCameraDebug(false)} className="text-xs">×</Button>
@@ -1121,9 +1095,9 @@ export default function App(){
           </div>
         )}
         
-        {/* Show Camera Debug Button */}
+        {/* Hidden Show Camera Debug Button - functionality preserved */}
         {!showCameraDebug && (
-          <Button onClick={() => setShowCameraDebug(true)} className="absolute top-4 left-4 text-xs">
+          <Button onClick={() => setShowCameraDebug(true)} className="absolute top-4 left-4 text-xs opacity-0 pointer-events-none">
             Camera Debug
           </Button>
         )}
@@ -1132,25 +1106,108 @@ export default function App(){
         {hoverTooltip && (<div style={{left:hoverTooltip.x+10, top:hoverTooltip.y+10}} className="pointer-events-none absolute z-10 text-[11px] px-2 py-1 rounded bg-black/80 border border-white/10">{hoverTooltip.text}</div>)}
       </div>
 
-      {/* Insights drawer */}
-      <div className={`fixed left-0 right-0 bottom-0 transition-transform duration-300 ${drawerOpen?"translate-y-0":"translate-y-[76%]"}`}>
-        <Card className="mx-auto max-w-5xl bg-neutral-900/90 backdrop-blur rounded-t-2xl p-4">
-          <div className="flex items-center justify-between mb-3">
-            <div className="text-sm text-white/80">Insights</div>
-            <Button variant="outline" className="rounded-2xl" onClick={()=>setDrawerOpen(v=>!v)}>{drawerOpen?"Collapse":"Expand"}</Button>
+      {/* Bottom controls and insights panel */}
+      <div className="fixed bottom-4 left-4 right-4 flex items-end gap-6">
+        {/* Depth Window Slider */}
+        <Card className="p-4 bg-black/50 backdrop-blur">
+          <div className="text-center mb-3">
+            <div className="text-sm text-white/90 font-medium">Depth</div>
+            <div className="text-xs text-white/60">
+              {Math.round(depthWindow[0])}–{Math.round(depthWindow[1])} m
+            </div>
+            <div className="text-[10px] text-white/50">
+              Thickness: {Math.round(depthWindow[1] - depthWindow[0])} m
+            </div>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
-            <div className="bg-white/5 rounded-xl p-3"><div className="text-white/60 text-xs">Grade</div><div className="text-lg">{selected?.grade||"—"}</div></div>
-            <div className="bg-white/5 rounded-xl p-3"><div className="text-white/60 text-xs">Depth</div><div className="text-lg">{selected?.depth||"—"}</div></div>
-            <div className="bg-white/5 rounded-xl p-3"><div className="text-white/60 text-xs">Confidence</div><div className="text-lg">{selected?.conf||"—"}</div></div>
+          
+          {/* Vertical Depth Range Slider */}
+          <div className="flex flex-col items-center gap-2 mb-4">
+            {/* Top label - shows current max value */}
+            <div className="font-['Inter:Light',_sans-serif] font-light leading-[0] not-italic opacity-[0.56] relative shrink-0 text-[10px] text-center text-nowrap text-white tracking-[-0.5px]">
+              <p className="leading-[normal] whitespace-pre">{Math.round(depthWindow[1])} m</p>
+            </div>
+            
+            {/* Vertical Slider */}
+            <VerticalDepthRangeSlider
+              value={depthWindow}
+              min={depthRange.min}
+              max={depthRange.max}
+              step={1}
+              onChange={handleDepthSliderChange}
+              onDragStart={() => setIsDraggingDepth(true)}
+              onDragEnd={() => {
+                setIsDraggingDepth(false);
+                setDepthTooltip(null);
+              }}
+              tooltip={isDraggingDepth ? depthTooltip : null}
+            />
+            
+            {/* Bottom label - shows current min value */}
+            <div className="font-['Inter:Light',_sans-serif] font-light leading-[0] not-italic opacity-[0.56] relative shrink-0 text-[10px] text-center text-nowrap text-white tracking-[-0.5px]">
+              <p className="leading-[normal] whitespace-pre">{Math.round(depthWindow[0])} m</p>
+            </div>
           </div>
-          <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
-            <div className="bg-white/5 rounded-xl p-3"><div className="text-white/60 text-xs">Depth Window</div><div className="text-lg">{Math.round(depthWindow[0])}–{Math.round(depthWindow[1])} m</div></div>
-            <div className="bg-white/5 rounded-xl p-3"><div className="text-white/60 text-xs">Visible Tonnage</div><div className="text-lg">~{Math.round(stats.tonnage).toLocaleString()} tons</div></div>
-            <div className="bg-white/5 rounded-xl p-3"><div className="text-white/60 text-xs">Avg Grade</div><div className="text-lg">{stats.avgGrade.toFixed(1)} g/T</div></div>
+        </Card>
+
+        {/* Grade Range Slider */}
+        <Card className="p-4 bg-black/50 backdrop-blur">
+          <div className="text-center mb-3">
+            <div className="text-sm text-white/90 font-medium">Grade</div>
+            <div className="text-xs text-white/60">
+              {Math.round(gradeRange[0])}–{Math.round(gradeRange[1])} g/T
+            </div>
+            <div className="text-[10px] text-white/50">
+              Range: {Math.round(gradeRange[1] - gradeRange[0])} g/T
+            </div>
           </div>
-          <div className="mt-3 grid grid-cols-1 sm:grid-cols-1 gap-3 text-sm">
-            <div className="bg-white/5 rounded-xl p-3"><div className="text-white/60 text-xs">Confidence Mix</div><div className="text-sm">{`${Math.round((stats.mix.Measured || 0) / Math.max(1, (stats.mix.Measured || 0) + (stats.mix.Indicated || 0) + (stats.mix.Inferred || 0)) * 100) || 0}% Measured / ${Math.round((stats.mix.Indicated || 0) / Math.max(1, (stats.mix.Measured || 0) + (stats.mix.Indicated || 0) + (stats.mix.Inferred || 0)) * 100) || 0}% Indicated / ${Math.round((stats.mix.Inferred || 0) / Math.max(1, (stats.mix.Measured || 0) + (stats.mix.Indicated || 0) + (stats.mix.Inferred || 0)) * 100) || 0}% Inferred`}</div></div>
+
+          {/* Vertical Grade Range Slider */}
+          <div className="flex flex-col items-center gap-2 mb-4">
+            {/* Top label - shows current max value */}
+            <div className="font-['Inter:Light',_sans-serif] font-light leading-[0] not-italic opacity-[0.56] relative shrink-0 text-[10px] text-center text-nowrap text-white tracking-[-0.5px]">
+              <p className="leading-[normal] whitespace-pre">{Math.round(gradeRange[1])} g/T</p>
+            </div>
+            
+            {/* Vertical Slider */}
+            <VerticalGradeRangeSlider
+              value={gradeRange}
+              min={0}
+              max={40}
+              step={1}
+              onChange={handleGradeSliderChange}
+              onDragStart={() => setIsDraggingGrade(true)}
+              onDragEnd={() => {
+                setIsDraggingGrade(false);
+                setGradeTooltip(null);
+              }}
+              tooltip={isDraggingGrade ? gradeTooltip : null}
+            />
+            
+            {/* Bottom label - shows current min value */}
+            <div className="font-['Inter:Light',_sans-serif] font-light leading-[0] not-italic opacity-[0.56] relative shrink-0 text-[10px] text-center text-nowrap text-white tracking-[-0.5px]">
+              <p className="leading-[normal] whitespace-pre">{Math.round(gradeRange[0])} g/T</p>
+            </div>
+          </div>
+        </Card>
+
+        {/* Insights Panel */}
+        <Card className="bg-neutral-900/90 backdrop-blur rounded-2xl p-4 max-w-sm">
+          <div className="mb-3">
+            <div className="text-sm text-white/90 font-medium">Insight</div>
+          </div>
+          <div className="grid grid-cols-1 gap-3 text-sm">
+            <div className="bg-white/5 rounded-xl p-3">
+              <div className="text-white/60 text-xs">Avg grade</div>
+              <div className="text-lg text-white">{stats.avgGrade.toFixed(1)} g/T</div>
+            </div>
+            <div className="bg-white/5 rounded-xl p-3">
+              <div className="text-white/60 text-xs">Visible Tonnage</div>
+              <div className="text-lg text-white">~{Math.round(stats.tonnage).toLocaleString()} tons</div>
+            </div>
+            <div className="bg-white/5 rounded-xl p-3">
+              <div className="text-white/60 text-xs">Confidence mix</div>
+              <div className="text-sm text-white">{`${Math.round((stats.mix.Measured || 0) / Math.max(1, (stats.mix.Measured || 0) + (stats.mix.Indicated || 0) + (stats.mix.Inferred || 0)) * 100) || 0}% Measured / ${Math.round((stats.mix.Indicated || 0) / Math.max(1, (stats.mix.Measured || 0) + (stats.mix.Indicated || 0) + (stats.mix.Inferred || 0)) * 100) || 0}% Indicated / ${Math.round((stats.mix.Inferred || 0) / Math.max(1, (stats.mix.Measured || 0) + (stats.mix.Indicated || 0) + (stats.mix.Inferred || 0)) * 100) || 0}% Inferred`}</div>
+            </div>
           </div>
         </Card>
       </div>
